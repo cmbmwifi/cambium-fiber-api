@@ -172,6 +172,80 @@ EOF
     print_info "Environment file created: ${ENV_FILE}"
 }
 
+prompt_docs_auth() {
+    print_info "Documentation Authentication Setup"
+    echo ""
+    print_warn "SECURITY: The /docs and /setup endpoints WILL be protected with HTTP Basic Authentication."
+    echo ""
+
+    if [ -n "${DOCS_AUTH_ENABLED}" ]; then
+        if [ "${DOCS_AUTH_ENABLED}" = "false" ]; then
+            print_warn "DOCS_AUTH_ENABLED=false detected - documentation will be publicly accessible"
+            PROTECT_DOCS="N"
+        else
+            PROTECT_DOCS="Y"
+            print_info "Using DOCS_AUTH_ENABLED from environment: ${PROTECT_DOCS}"
+        fi
+    else
+        echo "Press ENTER to protect endpoints (recommended)"
+        read -p "Or type exactly 'I understand the risk' to disable protection: " DISABLE_PROTECTION
+        if [ "${DISABLE_PROTECTION}" = "I understand the risk" ]; then
+            PROTECT_DOCS="N"
+        else
+            PROTECT_DOCS="Y"
+        fi
+    fi
+
+    if [[ "${PROTECT_DOCS}" =~ ^[Yy]$ ]]; then
+        if [ -n "${DOCS_USERNAME}" ]; then
+            DOCS_USER="${DOCS_USERNAME}"
+            print_info "Using DOCS_USERNAME from environment: ${DOCS_USER}"
+        else
+            read -p "Enter username for /docs and /setup [admin]: " DOCS_USER
+            DOCS_USER=${DOCS_USER:-admin}
+        fi
+
+        if [ -n "${DOCS_PASSWORD}" ]; then
+            DOCS_PASS="${DOCS_PASSWORD}"
+            print_info "Using DOCS_PASSWORD from environment"
+        else
+            read -sp "Enter password: " DOCS_PASS
+            echo ""
+            read -sp "Confirm password: " DOCS_PASS_CONFIRM
+            echo ""
+
+            if [ "${DOCS_PASS}" != "${DOCS_PASS_CONFIRM}" ]; then
+                print_error "Passwords do not match!"
+                exit 1
+            fi
+
+            if [ -z "${DOCS_PASS}" ]; then
+                print_error "Password cannot be empty!"
+                exit 1
+            fi
+        fi
+
+        print_info "Generating password hash..."
+
+        DOCS_HASH=$(docker run --rm python:3.11-slim bash -c "pip install -q bcrypt && python -c \"import bcrypt; print(bcrypt.hashpw('${DOCS_PASS}'.encode('utf-8'), bcrypt.gensalt()).decode('utf-8'))\"" 2>/dev/null)
+
+        if [ -z "${DOCS_HASH}" ]; then
+            print_error "Failed to generate password hash"
+            exit 1
+        fi
+
+        export DOCS_AUTH_ENABLED="true"
+        export DOCS_AUTH_USERNAME="${DOCS_USER}"
+        export DOCS_AUTH_HASH="${DOCS_HASH}"
+
+        print_info "✓ Documentation authentication configured"
+    else
+        export DOCS_AUTH_ENABLED="false"
+        print_warn "Documentation endpoints will be publicly accessible"
+    fi
+    echo ""
+}
+
 create_connections_file() {
     print_info "Creating connections configuration file..."
 
@@ -183,12 +257,22 @@ create_connections_file() {
         rm -rf "${CONNECTIONS_FILE}"
     fi
 
-    # Create empty connections.json (setup wizard will configure it)
-    cat > "${CONNECTIONS_FILE}" << 'EOF'
+    if [ "${DOCS_AUTH_ENABLED}" = "true" ]; then
+        cat > "${CONNECTIONS_FILE}" << EOF
+{
+  "docs_auth": {
+    "username": "${DOCS_AUTH_USERNAME}",
+    "password_hash": "${DOCS_AUTH_HASH}"
+  }
+}
+EOF
+        print_info "connections.json created with documentation authentication"
+    else
+        cat > "${CONNECTIONS_FILE}" << 'EOF'
 {}
 EOF
-
-    print_info "Empty connections.json created (will be configured via setup wizard)"
+        print_info "Empty connections.json created (will be configured via setup wizard)"
+    fi
 }
 
 load_or_pull_image() {
@@ -235,51 +319,201 @@ load_or_pull_image() {
     fi
 }
 
+validate_endpoint() {
+    local url="$1"
+    local name="$2"
+    local max_retries="${3:-3}"
+    local acceptable_codes="${4:-200}"
+    local retry_count=0
+
+    while [ $retry_count -lt $max_retries ]; do
+        response=$(curl -s -w "\n%{http_code}" "$url" 2>&1)
+        http_code=$(echo "$response" | tail -n 1)
+
+        for code in $(echo "$acceptable_codes" | tr ',' ' '); do
+            if [ "$http_code" -eq "$code" ]; then
+                return 0
+            fi
+        done
+
+        retry_count=$((retry_count + 1))
+        [ $retry_count -lt $max_retries ] && sleep 1
+    done
+    return 1
+}
+
+check_container_logs() {
+    print_info "Checking container logs for errors..."
+    echo ""
+    echo "==================== Last 30 Log Lines ===================="
+    docker logs --tail 30 cambium-fiber-api 2>&1
+    echo "==========================================================="
+    echo ""
+}
+
+print_troubleshooting() {
+    echo ""
+    print_error "================================================================"
+    print_error "  Installation Incomplete - Endpoints Not Ready"
+    print_error "================================================================"
+    echo ""
+    print_info "Troubleshooting Steps:"
+    echo ""
+    print_info "1. Check container status:"
+    print_info "   docker ps -a | grep cambium-fiber-api"
+    echo ""
+    print_info "2. View full logs:"
+    print_info "   docker logs cambium-fiber-api"
+    echo ""
+    print_info "3. Check for common issues:"
+    print_info "   - Port ${CAMBIUM_API_PORT} already in use: lsof -i:${CAMBIUM_API_PORT}"
+    print_info "   - Permissions on connections.json: ls -la ${INSTALL_DIR}/connections.json"
+    print_info "   - Docker resources: docker system df"
+    echo ""
+    print_info "4. Try restarting the container:"
+    print_info "   cd ${INSTALL_DIR} && docker compose down"
+    print_info "   docker compose up -d"
+    echo ""
+    print_info "5. Check Docker networking:"
+    print_info "   curl -v http://localhost:${CAMBIUM_API_PORT}/health"
+    echo ""
+    print_info "Common Issues:"
+    print_info "  - If /health works but /docs fails: Check for Python import errors in logs"
+    print_info "  - If connection refused: Container may not be running or port not exposed"
+    print_info "  - If 500 errors: Check application logs for exceptions"
+    echo ""
+    print_info "================================================================"
+}
+
+check_existing_installation() {
+    # Check if container already exists
+    if docker ps -a --format '{{.Names}}' | grep -q '^cambium-fiber-api$'; then
+        if docker ps --format '{{.Names}}' | grep -q '^cambium-fiber-api$'; then
+            # Container is running
+            source "${ENV_FILE}"
+            print_warn "Cambium Fiber API is already installed and running"
+            echo ""
+            print_info "The service is accessible at:"
+            print_info "  API Docs: http://localhost:${CAMBIUM_API_PORT}/docs"
+            print_info "  Health: http://localhost:${CAMBIUM_API_PORT}/health"
+            echo ""
+            print_info "To reinstall, first uninstall with: ./uninstall.sh"
+            echo ""
+            exit 0
+        else
+            # Container exists but is stopped - clean it up
+            print_info "Found stopped container, removing it..."
+            cd "${INSTALL_DIR}"
+            docker compose down 2>/dev/null || true
+            docker rm cambium-fiber-api 2>/dev/null || true
+        fi
+    fi
+}
+
 start_container() {
     print_info "Starting Cambium Fiber API..."
 
     cd "${INSTALL_DIR}"
     docker compose --env-file "${ENV_FILE}" up -d
 
-    print_info "Waiting for API to be ready..."
+    source "${ENV_FILE}"
 
-    # Wait for health check
+    print_info "Waiting for container to start..."
+    sleep 5
+
+    # Check if container is actually running
+    if ! docker ps | grep -q cambium-fiber-api; then
+        print_error "Container failed to start!"
+        check_container_logs
+        print_troubleshooting
+        exit 1
+    fi
+
+    print_info "Validating endpoints..."
+
+    # Track which endpoints work
+    HEALTH_OK=false
+    DOCS_OK=false
+    SETUP_OK=false
+
+    # Wait for health endpoint with retry
     MAX_RETRIES=30
     RETRY_COUNT=0
 
-    source "${ENV_FILE}"
-    HEALTH_URL="http://localhost:${CAMBIUM_API_PORT}/health"
-
     while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-        if curl -sf "${HEALTH_URL}" > /dev/null 2>&1; then
-            print_info "API is ready!"
-            return 0
+        if validate_endpoint "http://localhost:${CAMBIUM_API_PORT}/health" "health" 1; then
+            HEALTH_OK=true
+            break
         fi
-
         RETRY_COUNT=$((RETRY_COUNT + 1))
         echo -n "."
         sleep 2
     done
-
     echo ""
-    print_warn "API did not become ready within expected time"
-    print_info "Check logs with: docker logs cambium-fiber-api"
+
+    if [ "$HEALTH_OK" = false ]; then
+        print_error "✗ Health endpoint failed to respond"
+        check_container_logs
+        print_troubleshooting
+        exit 1
+    fi
+
+    # Now validate the other critical endpoints
+    # If docs auth is enabled, 401 Unauthorized is expected and means endpoints are working
+    EXPECTED_DOCS_CODES="200"
+    if [ "${DOCS_AUTH_ENABLED}" = "true" ]; then
+        EXPECTED_DOCS_CODES="200,401"
+    fi
+
+    if validate_endpoint "http://localhost:${CAMBIUM_API_PORT}/docs" "docs" 3 "${EXPECTED_DOCS_CODES}"; then
+        DOCS_OK=true
+    else
+        print_error "✗ /docs endpoint is not responding or returning errors"
+        DOCS_OK=false
+    fi
+
+    if validate_endpoint "http://localhost:${CAMBIUM_API_PORT}/setup" "setup" 3 "${EXPECTED_DOCS_CODES}"; then
+        SETUP_OK=true
+    else
+        print_error "✗ /setup endpoint is not responding or returning errors"
+        SETUP_OK=false
+    fi
+
+    # If any critical endpoint failed, show diagnostics and fail
+    if [ "$DOCS_OK" = false ] || [ "$SETUP_OK" = false ]; then
+        echo ""
+        print_error "Critical endpoints are not responding correctly!"
+        print_info "Getting diagnostic information..."
+        check_container_logs
+
+        # Test each endpoint manually to get detailed error info
+        echo ""
+        print_info "Detailed endpoint testing:"
+        for endpoint in "health" "docs" "setup"; do
+            echo ""
+            print_info "Testing /$endpoint:"
+            curl -v "http://localhost:${CAMBIUM_API_PORT}/$endpoint" 2>&1 | head -n 20
+        done
+
+        print_troubleshooting
+        exit 1
+    fi
+
+    print_info "✓ Ready"
+
+    # Export status for print_success
+    export HEALTH_OK DOCS_OK SETUP_OK
 }
 
 open_browser() {
     # Check if browser should be opened (skip for headless/CI environments)
     # If OPEN_BROWSER is set (uncommented), skip browser open
     if [ -n "${OPEN_BROWSER}" ]; then
-        print_info "Skipping browser open (headless mode: OPEN_BROWSER is set)"
-        source "${ENV_FILE}"
-        print_info "Setup wizard URL: http://localhost:${CAMBIUM_API_PORT}/setup"
         return
     fi
 
     source "${ENV_FILE}"
     SETUP_URL="http://localhost:${CAMBIUM_API_PORT}/setup"
-
-    print_info "Opening setup wizard in browser..."
 
     # Try different browser commands
     if command -v xdg-open &> /dev/null; then
@@ -288,37 +522,24 @@ open_browser() {
         gnome-open "${SETUP_URL}" &> /dev/null &
     elif command -v open &> /dev/null; then
         open "${SETUP_URL}" &> /dev/null &
-    else
-        print_warn "Could not auto-open browser"
-        print_info "Please open this URL manually: ${SETUP_URL}"
-        return
     fi
-
-    print_info "Setup wizard opened at: ${SETUP_URL}"
 }
 
 print_success() {
-    echo ""
-    print_info "================================================================"
-    print_info "  Cambium Fiber API Installation Complete!"
-    print_info "================================================================"
-    echo ""
-
     source "${ENV_FILE}"
 
-    print_info "Installation directory: ${INSTALL_DIR}"
-    print_info "API URL: http://localhost:${CAMBIUM_API_PORT}"
-    print_info "Setup wizard: http://localhost:${CAMBIUM_API_PORT}/setup"
-    print_info "API docs: http://localhost:${CAMBIUM_API_PORT}/docs"
     echo ""
-    print_info "Common commands:"
-    print_info "  Start:   cd ${INSTALL_DIR} && docker compose up -d"
-    print_info "  Stop:    cd ${INSTALL_DIR} && docker compose down"
-    print_info "  Logs:    docker logs -f cambium-fiber-api"
-    print_info "  Status:  docker ps | grep cambium-fiber-api"
+    echo "================================================================"
+    echo "  ✓ Installation Complete!"
+    echo "================================================================"
     echo ""
-    print_info "Complete the setup wizard to configure your OLT connections"
-    print_info "================================================================"
+    echo "  Next: Open http://localhost:${CAMBIUM_API_PORT}/setup to configure your OLTs"
+    echo ""
+    echo "  API Documentation: http://localhost:${CAMBIUM_API_PORT}/docs"
+    echo "  View Logs: docker logs -f cambium-fiber-api"
+    echo ""
+    echo "================================================================"
+    echo ""
 }
 
 # Main installation flow
@@ -333,7 +554,9 @@ main() {
     create_install_dir
     download_compose_file
     create_env_file
+    prompt_docs_auth
     create_connections_file
+    check_existing_installation
     load_or_pull_image
     start_container
     open_browser

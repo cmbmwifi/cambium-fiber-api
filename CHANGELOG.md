@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+---
+
+## [1.0.0-beta.1] - 2026-02-11
+
+### Added
+- **Setup wizard authentication protection** - HTTP Basic Auth now protects /setup endpoints (/setup, /setup/test, /setup/save) using the same docs_auth credentials system
+- **Documentation header navigation** - "Cambium Fiber API" title and settings gear icon in Swagger UI header enables quick navigation to /setup from documentation
+
+### Fixed
+- **Installer false positive success reports** - Installer now validates all critical endpoints (/health, /docs, /setup) before declaring success
+  - Added comprehensive endpoint validation with retry logic
+  - Added detailed troubleshooting guidance when endpoints fail
+  - Added container log display on failures
+  - Success message now only shows verified endpoints with ✓ indicators
+  - Exit with error code if any critical endpoint fails validation
+  - Applies to both Linux (install.sh) and Windows (install.ps1) installers
+- **Added installer validation tests** - 10+ new tests ensure installers properly validate endpoints and provide troubleshooting guidance
+- **FastAPI dependency injection compatibility** - Fixed `verify_docs_auth()` function signature for Python 3.13 + FastAPI (keyword-only parameter)
+
+### Changed
+- **Simplified installer output** - Reduced verbose installation messages to focus on actionable next steps
+  - Success message now clearly highlights: "Open http://localhost:8000/setup to configure your OLTs"
+  - Removed technical details (container status, verified endpoints list, common commands)
+  - Quieter validation output - shows dots during health check wait, then "✓ Ready"
+  - Removed browser opening messages in headless mode
+  - Makes it immediately clear what the user should do after installation completes
+- **Docker image optimization** - Reduced production image from 1.72GB to 440MB (74% smaller) using multi-stage build
+  - Build stage contains compilation tools (gcc, g++, cargo)
+  - Production stage contains only runtime dependencies
+  - Tarball reduced from 434MB to 113MB
+  - No functional changes, pure size optimization
+
+---
+
 ## [1.0.0] - 2026-02-04
 
 ### Added
