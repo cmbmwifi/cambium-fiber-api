@@ -27,9 +27,9 @@
     <script src="https://unpkg.com/swagger-ui-dist@5.11.0/swagger-ui-standalone-preset.js"></script>
     <script>
         window.onload = function() {
-            // Try to load from parent directory (where openapi.json is)
+            // Load OpenAPI spec from same directory
             const ui = SwaggerUIBundle({
-                url: "../openapi.json",
+                url: "./openapi.json",
                 dom_id: '#swagger-ui',
                 deepLinking: true,
                 presets: [
