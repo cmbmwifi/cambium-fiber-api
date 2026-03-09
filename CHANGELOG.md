@@ -7,9 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [1.0.0-beta.1] - 2026-02-11
+## [1.0.0-RC1] - 2026-03-09
 
-Initial public release.
+Initial release candidate.
 
 Unified REST API for managing fiber networks across multiple OLTs. Reduces operational complexity by centralizing ONU provisioning, location tracking, and configuration management into a single interface.
 

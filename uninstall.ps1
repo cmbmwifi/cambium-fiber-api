@@ -281,4 +281,3 @@ catch {
     Write-ColorOutput "Uninstallation failed: $_" -Level ERROR
     exit 1
 }
-
