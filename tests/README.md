@@ -46,7 +46,7 @@ export OAUTH_CLIENT_ID="your_client_id_here"
 export OAUTH_CLIENT_SECRET="your_client_secret_here"
 
 # Optional: API base URL (defaults to localhost)
-export API_BASE_URL="http://your-server:8000"
+export API_BASE_URL="http://your-server:8192"
 ```
 
 **Finding OAuth Credentials:**
@@ -155,7 +155,7 @@ E   AssertionError: OAuth token acquisition failed: 401 - {"detail": "Invalid cr
 | Failure Pattern | Likely Cause | Solution |
 |----------------|-------------|----------|
 | `OAuth token acquisition failed: 401` | Invalid credentials | Verify `OAUTH_CLIENT_ID` and `OAUTH_CLIENT_SECRET` match `connections.json` |
-| `API not accessible` | Network/firewall issue | Check API is running: `curl http://your-server:8000/health` |
+| `API not accessible` | Network/firewall issue | Check API is running: `curl http://your-server:8192/health` |
 | `No OLTs configured` | Empty configuration | Verify `connections.json` has `OLTs` section with at least one OLT |
 | `502 Bad gateway - OLT communication` | OLT unreachable | Check network routing, firewall rules, OLT powered on |
 | `404 Not found` | Incorrect API_BASE_URL | Verify base URL format: `http://hostname:port` (no trailing slash) |
@@ -238,7 +238,7 @@ pip install pytest pytest-bdd requests python-dotenv
 
 - Verify `API_BASE_URL` is correct and API is running
 - Check firewall rules allow access to API port
-- Confirm network connectivity: `ping your-server` and `curl http://your-server:8000/health`
+- Confirm network connectivity: `ping your-server` and `curl http://your-server:8192/health`
 
 ### Connection refused errors
 

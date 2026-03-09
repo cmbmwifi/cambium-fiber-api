@@ -8,84 +8,24 @@
     "retry_interval": 30,
     "success_threshold": 10
   },
-  "groups": [
-    {
-      "id": "default-auth",
-      "username": "admin",
-      "password": "your_password",
-      "suspension": {
-        "service_profile": "default"
-      }
-    }
-  ],
-  "virtual_stacks": [
-    {
-      "id": "plano-core",
-      "olt_ids": ["F6ZF01C8P631", "F6ZF01C8P632"],
-      "groups": ["default-auth"]
-    },
-    {
-      "id": "dallas-core",
-      "olt_ids": ["F6ZF01C8P633", "F6ZF01C8P634"],
-      "groups": ["default-auth"]
-    },
-    {
-      "id": "richardson-core",
-      "olt_ids": ["F6ZF01C8P635", "F6ZF01C8P636"],
-      "groups": ["default-auth"]
-    }
-  ],
-  "olts": [
-    {
-      "id": "F6ZF01C8P631",
-      "base_url": "https://192.168.50.10",
-      "stack_id": "plano-core"
-    },
-    {
-      "id": "F6ZF01C8P632",
-      "base_url": "https://192.168.50.11",
-      "stack_id": "plano-core"
-    },
-    {
-      "id": "F6ZF01C8P633",
-      "base_url": "https://192.168.50.12",
-      "stack_id": "dallas-core"
-    },
-    {
-      "id": "F6ZF01C8P634",
-      "base_url": "https://192.168.50.13",
-      "stack_id": "dallas-core"
-    },
-    {
-      "id": "F6ZF01C8P635",
-      "base_url": "https://192.168.50.14",
-      "stack_id": "richardson-core"
-    },
-    {
-      "id": "F6ZF01C8P636",
-      "base_url": "https://192.168.50.15",
-      "stack_id": "richardson-core"
-    }
-  ],
+  "groups": [],
+  "virtual_stacks": [],
+  "olts": [],
   "cache_ttl": {
     "bulk_ttl": 3600,
-     "single_ttl": 30
+    "single_ttl": 30
   },
   "jwt_secret": "REPLACE_WITH_RANDOM_SECRET_IN_PRODUCTION",
-  "oauth_clients": [
-    {
-      "client_id": "example-admin",
-      "client_secret_hash": "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8",
-      "scopes": ["admin"],
-      "enabled": false,
-      "description": "Example admin client (secret: 'password' - DO NOT USE IN PRODUCTION)"
-    },
-    {
-      "client_id": "example-monitoring",
-      "client_secret_hash": "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92",
-      "scopes": ["read"],
-      "enabled": false,
-      "description": "Example read-only client (secret: '123456' - DO NOT USE IN PRODUCTION)"
-    }
-  ]
+  "oauth": {
+    "clients": [
+      {
+        "client_id": "example-admin",
+        "client_secret": "password",
+        "client_secret_hash": "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8",
+        "scopes": ["admin"],
+        "enabled": true,
+        "description": "Example admin client for validation tests (default secret: 'password' - change in production)"
+      }
+    ]
+  }
 }

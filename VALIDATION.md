@@ -16,12 +16,12 @@ The validation tool helps you:
 After installation, open the validation interface in your web browser:
 
 ```
-http://your-server:8000/validate
+http://your-server:8192/validate
 ```
 
 **Finding the Link:**
 - From the **setup wizard completion screen** - Click "✓ Validate Installation"
-- From the **API documentation** - Navigate from http://your-server:8000/docs
+- From the **API documentation** - Navigate from http://your-server:8192/docs
 - **Bookmark it** - Useful for periodic health checks
 
 Replace `your-server` with:
@@ -57,7 +57,7 @@ You can safely run these tests in production without risk of modifying your OLT 
 
 ### Step-by-Step
 
-1. **Open the validation page** - http://your-server:8000/validate
+1. **Open the validation page** - http://your-server:8192/validate
 
 2. **Select test categories** - Check the boxes for categories you want to test:
    - Select all categories for comprehensive validation
@@ -217,7 +217,7 @@ docker-compose restart
    - Speed values invalid (check supported speeds for your OLT model)
    - Missing required fields in request
 3. **Test with API documentation:**
-   - Visit http://your-server:8000/docs
+   - Visit http://your-server:8192/docs
    - Use interactive "Try it out" to test parameters
    - Review schema definitions for valid values
 
@@ -236,14 +236,14 @@ docker-compose restart
 
 2. **Check API health directly:**
    ```bash
-   curl http://localhost:8000/health
+   curl http://localhost:8192/health
    ```
    Should return: `{"status": "ok"}`
 
 3. **Review firewall rules:**
-   - API port (default 8000) must be open
+   - API port (default 8192) must be open
    - Check iptables, firewalld, or cloud security groups
-   - Test from another machine: `telnet your-server 8000`
+   - Test from another machine: `telnet your-server 8192`
 
 4. **Check Docker networking:**
    ```bash
@@ -368,11 +368,11 @@ Validation tests use **the same OAuth authentication** as production API clients
 
 ### Validation page won't load
 
-**Problem:** http://your-server:8000/validate returns error
+**Problem:** http://your-server:8192/validate returns error
 
 **Solutions:**
 1. Verify API is running: `docker ps | grep cambium-fiber-api`
-2. Check API health: `curl http://your-server:8000/health`
+2. Check API health: `curl http://your-server:8192/health`
 3. Review API logs: `docker logs cambium-fiber-api`
 4. Ensure you're using the correct hostname/IP and port
 
@@ -384,7 +384,7 @@ Validation tests use **the same OAuth authentication** as production API clients
 1. **Refresh the page** - May have lost connection to API
 2. **Check API responsiveness:**
    ```bash
-   curl http://your-server:8000/health
+   curl http://your-server:8192/health
    ```
 3. **Review logs for errors:**
    ```bash
@@ -442,7 +442,7 @@ cd /opt/cambium-fiber-api/pub/tests
 # Set environment variables
 export OAUTH_CLIENT_ID="your_client_id"
 export OAUTH_CLIENT_SECRET="your_secret"
-export API_BASE_URL="http://localhost:8000"
+export API_BASE_URL="http://localhost:8192"
 
 # Run all tests
 pytest
@@ -474,7 +474,7 @@ If validation reveals issues you cannot resolve:
 ## Additional Documentation
 
 - **Installation Guide:** `README.md` - Initial setup instructions
-- **API Documentation:** http://your-server:8000/docs - Interactive API reference
+- **API Documentation:** http://your-server:8192/docs - Interactive API reference
 - **Test Details:** `pub/tests/README.md` - Command-line testing documentation
 - **Architecture:** `docs/architecture/production-validation.md` - Design decisions
 

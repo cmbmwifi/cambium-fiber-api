@@ -5,7 +5,7 @@ services:
     image: ${CAMBIUM_API_IMAGE:-cambium-fiber-api:latest}
     container_name: cambium-fiber-api
     ports:
-      - "${CAMBIUM_API_PORT:-8000}:8000"
+      - "${CAMBIUM_API_PORT:-8192}:8192"
     volumes:
       # Configuration file (optional - setup wizard creates if missing)
       - ${CAMBIUM_CONFIG_PATH:-./connections.json}:/app/connections.json${CAMBIUM_CONFIG_MODE:-}
@@ -24,7 +24,7 @@ services:
       - SSL_KEY_PATH=${SSL_KEY_PATH:-}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "--spider", "--quiet", "http://localhost:8000/health"]
+      test: ["CMD", "wget", "--spider", "--quiet", "http://localhost:8192/health"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -1,4 +1,5 @@
 # pub/tests/features/health.feature
+@health
 Feature: Health and Metrics Endpoints
   As a system administrator
   I want to verify health and monitoring endpoints
@@ -7,12 +8,12 @@ Feature: Health and Metrics Endpoints
   Background:
     Given the API is running
 
-  Scenario: Health check endpoint returns OK
+  Scenario: API service is running and healthy
     When I request the health endpoint
     Then the response status code should be 200
     And the response should contain status "ok"
 
-  Scenario: Metrics endpoint returns Prometheus format
+  Scenario: System health metrics are available for monitoring
     When I request the metrics endpoint
     Then the response status code should be 200
     And the response should be in Prometheus exposition format

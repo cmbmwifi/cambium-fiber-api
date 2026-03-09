@@ -5,10 +5,15 @@ Tests run against deployed API instances using environment configuration.
 """
 
 import os
+import sys
 from typing import Any, Generator
 
 import pytest
 import requests
+
+# Ensure test root is on path so step definitions can be imported
+sys.path.insert(0, os.path.dirname(__file__))
+from steps import production_steps  # noqa: F401
 
 
 @pytest.fixture(scope="session")
@@ -16,61 +21,51 @@ def api_base_url() -> str:
     """Get API base URL from environment.
 
     Returns:
-        Base URL for API requests (e.g., http://localhost:8000)
+        Base URL for API requests (e.g., http://localhost:8192)
 
     Environment Variables:
-        API_BASE_URL: Base URL for the deployed API (default: http://localhost:8000)
+        API_BASE_URL: Base URL for the deployed API (default: http://localhost:8192)
     """
-    return os.getenv("API_BASE_URL", "http://localhost:8000")
+    return os.getenv("API_BASE_URL", "http://localhost:8192")
 
 
 @pytest.fixture(scope="session")
-def oauth_client_id() -> str:
+def oauth_client_id() -> str | None:
     """Get OAuth client ID from environment.
 
     Returns:
-        OAuth client ID for authentication
+        OAuth client ID for authentication, or None if not set
 
     Environment Variables:
-        OAUTH_CLIENT_ID: OAuth 2.0 client ID (required)
+        OAUTH_CLIENT_ID: OAuth 2.0 client ID (optional)
 
-    Raises:
-        ValueError: If OAUTH_CLIENT_ID not set
+    Notes:
+        - Returns None if not set, allowing non-authenticated tests to run
+        - Tests requiring OAuth will fail with clear message when requesting token
     """
-    client_id = os.getenv("OAUTH_CLIENT_ID")
-    if not client_id:
-        raise ValueError(
-            "OAUTH_CLIENT_ID environment variable not set. "
-            "See pub/tests/README.md for setup instructions."
-        )
-    return client_id
+    return os.getenv("OAUTH_CLIENT_ID")
 
 
 @pytest.fixture(scope="session")
-def oauth_client_secret() -> str:
+def oauth_client_secret() -> str | None:
     """Get OAuth client secret from environment.
 
     Returns:
-        OAuth client secret for authentication
+        OAuth client secret for authentication, or None if not set
 
     Environment Variables:
-        OAUTH_CLIENT_SECRET: OAuth 2.0 client secret (required)
+        OAUTH_CLIENT_SECRET: OAuth 2.0 client secret (optional)
 
-    Raises:
-        ValueError: If OAUTH_CLIENT_SECRET not set
+    Notes:
+        - Returns None if not set, allowing non-authenticated tests to run
+        - Tests requiring OAuth will fail with clear message when requesting token
     """
-    client_secret = os.getenv("OAUTH_CLIENT_SECRET")
-    if not client_secret:
-        raise ValueError(
-            "OAUTH_CLIENT_SECRET environment variable not set. "
-            "See pub/tests/README.md for setup instructions."
-        )
-    return client_secret
+    return os.getenv("OAUTH_CLIENT_SECRET")
 
 
 @pytest.fixture(scope="session")
 def oauth_token(
-    api_base_url: str, oauth_client_id: str, oauth_client_secret: str
+    api_base_url: str, oauth_client_id: str | None, oauth_client_secret: str | None
 ) -> str:
     """Obtain OAuth access token for API authentication.
 
@@ -83,10 +78,18 @@ def oauth_token(
         Bearer token for API authentication
 
     Raises:
+        pytest.skip: If OAuth credentials not provided
         AssertionError: If token acquisition fails
     """
+    if not oauth_client_id or not oauth_client_secret:
+        pytest.skip(
+            "OAuth credentials not provided. Set OAUTH_CLIENT_ID and "
+            "OAUTH_CLIENT_SECRET environment variables. "
+            "See pub/tests/README.md for setup instructions."
+        )
+
     response = requests.post(
-        f"{api_base_url}/oauth/token",
+        f"{api_base_url}/api/v2/access/token",
         data={
             "grant_type": "client_credentials",
             "client_id": oauth_client_id,

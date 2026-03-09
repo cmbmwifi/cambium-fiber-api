@@ -1,7 +1,7 @@
 #!/bin/bash
 # Cambium Fiber API - Linux Uninstaller
 # Removes installed Cambium Fiber API components
-# Usage: bash uninstall.sh
+# Usage: bash uninstall.sh [-y|--yes]
 
 set -e  # Exit on error
 
@@ -15,6 +15,7 @@ NC='\033[0m' # No Color
 INSTALL_DIR="/opt/cambium-fiber-api"
 CONTAINER_NAME="cambium-fiber-api"
 IMAGE_NAME="cambium-fiber-api"
+YES_TO_ALL=false
 
 # Functions
 print_info() {
@@ -32,6 +33,11 @@ print_error() {
 confirm() {
     local prompt="$1"
     local default="${2:-n}"
+
+    if [ "$YES_TO_ALL" = true ]; then
+        echo -e "${prompt} [auto-yes]"
+        return 0
+    fi
 
     if [ "$default" = "y" ]; then
         prompt="$prompt [Y/n]: "
@@ -260,6 +266,15 @@ main() {
     remove_data_directory
     print_summary
 }
+
+# Parse arguments
+for arg in "$@"; do
+    case "$arg" in
+        -y|--yes)
+            YES_TO_ALL=true
+            ;;
+    esac
+done
 
 # Run main uninstallation
 main

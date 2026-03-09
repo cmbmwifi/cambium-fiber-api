@@ -4,7 +4,7 @@
 
 param(
     [string]$Version = "latest",
-    [int]$Port = 8000,
+    [int]$Port = 8192,
     [string]$InstallDir = "$env:LOCALAPPDATA\Cambium\cambium-fiber-api"
 )
 
@@ -110,8 +110,8 @@ services:
   cambium-fiber-api:
     image: ${CAMBIUM_API_IMAGE:-cambium-fiber-api:latest}
     container_name: cambium-fiber-api
-    ports:
-      - "${CAMBIUM_API_PORT:-8000}:8000"
+        ports:
+            - "${CAMBIUM_API_PORT:-8192}:8192"
     volumes:
       - ${CAMBIUM_CONFIG_PATH:-./connections.json}:/app/connections.json${CAMBIUM_CONFIG_MODE:-}
       - api-data:/app/data
@@ -124,8 +124,8 @@ services:
       - SSL_CERT_PATH=${SSL_CERT_PATH:-}
       - SSL_KEY_PATH=${SSL_KEY_PATH:-}
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "--quiet", "http://localhost:8000/health"]
+        healthcheck:
+            test: ["CMD", "wget", "--spider", "--quiet", "http://localhost:8192/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -178,8 +178,8 @@ function New-EnvFile {
         $Port = [int]$env:API_PORT
         Write-ColorOutput "Using port from API_PORT: $Port" -Level INFO
     }
-    elseif ($Port -eq 8000) {
-        $userPort = Read-Host "Enter port to expose API [8000]"
+    elseif ($Port -eq 8192) {
+        $userPort = Read-Host "Enter port to expose API [8192]"
         if ($userPort) {
             $Port = [int]$userPort
         }
@@ -524,10 +524,10 @@ function Start-ApiContainer {
     }
 
     # Now validate the other critical endpoints
-    # If docs auth is enabled, 401 Unauthorized is expected and means endpoints are working
+    # Session-based auth redirects unauthenticated browsers with HTTP 307
     $expectedDocsCodes = @(200)
     if ($script:docsAuthEnabled) {
-        $expectedDocsCodes = @(200, 401)
+        $expectedDocsCodes = @(200, 303, 307, 401)
     }
 
     if (Test-Endpoint -Url "http://localhost:$apiPort/docs" -Name "docs" -MaxRetries 3 -AcceptableCodes $expectedDocsCodes) {
@@ -603,15 +603,31 @@ function Write-Success {
     $portLine = $envContent | Where-Object { $_ -match "^CAMBIUM_API_PORT=" }
     $apiPort = $portLine -replace "^CAMBIUM_API_PORT=", ""
 
+    # Helper function to create hyperlinks
+    function Write-Hyperlink {
+        param([string]$Url, [string]$Text = $Url)
+        # PowerShell hyperlink format: `e]8;;URL`e\TEXT`e]8;;`e\
+        $esc = [char]27
+        Write-Host "$esc]8;;$Url$esc\" -NoNewline
+        Write-Host $Text -ForegroundColor Blue -NoNewline
+        Write-Host "$esc]8;;$esc\" -NoNewline
+    }
+
     Write-Host ""
     Write-Host "================================================================"
-    Write-Host "  ✓ Installation Complete!"
+    Write-Host "  ✓ Installation Complete!" -ForegroundColor Green
     Write-Host "================================================================"
     Write-Host ""
-    Write-Host "  Next: Open http://localhost:$apiPort/setup to configure your OLTs"
+    Write-Host "  " -NoNewline
+    Write-Host "Next Step: " -ForegroundColor Yellow -NoNewline
+    Write-Host "Open " -NoNewline
+    Write-Hyperlink "http://localhost:$apiPort/setup"
+    Write-Host " to configure your OLTs"
     Write-Host ""
-    Write-Host "  API Documentation: http://localhost:$apiPort/docs"
-    Write-Host "  View Logs: docker logs -f cambium-fiber-api"
+    Write-Host "  API Documentation: " -ForegroundColor Cyan -NoNewline
+    Write-Hyperlink "http://localhost:$apiPort/docs"
+    Write-Host ""
+    Write-Host "  View Logs: docker logs -f cambium-fiber-api" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "================================================================"
     Write-Host ""
