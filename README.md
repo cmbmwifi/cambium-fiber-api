@@ -4,6 +4,10 @@ Unified REST API for managing fiber networks across multiple OLTs. Pre-configure
 
 **For:** ISPs, MSPs, and system integrators managing Cambium Fiber networks
 
+## 📖 API Documentation
+
+**[View Interactive API Documentation](https://cmbmwifi.github.io/cambium-fiber-api/docs/)** — Browse all endpoints, request/response schemas, and authentication flows before installing.
+
 ## Key Capabilities
 
 - **Multi-OLT aggregation** - Control hundreds of ONUs across all OLTs through one API
