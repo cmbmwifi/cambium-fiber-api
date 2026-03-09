@@ -34,3 +34,4 @@ docker-compose.override.yml
 
 # Release artifacts (use GitHub Releases for large binaries)
 *.tar.gz
+
