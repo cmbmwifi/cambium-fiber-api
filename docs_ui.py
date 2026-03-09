@@ -489,3 +489,4 @@ def get_custom_swagger_ui_html(
     """
 
     return HTMLResponse(content=html)
+
