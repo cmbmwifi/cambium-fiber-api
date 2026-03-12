@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.0-RC2] - 2026-03-11
+
+### Polish, Observability, & Error Handling
+- HTTP access logging with request IDs and latency
+- Sensitive data masking in logs
+- SSH error classification with actionable messages
+- Rate limiting on credentials download endpoint
+- Build timestamp in setup wizard footer
+- Improved JSON validation error handling
+- Enforced read-only OAuth clients across all PUT/PATCH routes with localized insufficient-scope errors
+
 ## [1.0.0-RC1] - 2026-03-09
 
 Initial release candidate.
