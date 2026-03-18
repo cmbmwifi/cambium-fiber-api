@@ -397,11 +397,13 @@ load_or_pull_image() {
         fi
     else
         # Derive tarball name and try to download from the distribution repo.
-        # VERSION may include a 'v' prefix already; normalise to vX.Y.Z.
+        # VERSION may include a 'v' prefix already; normalise to vX.Y.Z lowercase
+        # (GitHub Release tags are always lowercased by make release).
         IMAGE_VERSION="${CAMBIUM_API_IMAGE#*:}"
-        case "${IMAGE_VERSION}" in
-            v*) TARBALL_VERSION="${IMAGE_VERSION}" ;;
-            *)  TARBALL_VERSION="v${IMAGE_VERSION}" ;;
+        IMAGE_VERSION_LOWER=$(printf '%s' "${IMAGE_VERSION}" | tr 'A-Z' 'a-z')
+        case "${IMAGE_VERSION_LOWER}" in
+            v*) TARBALL_VERSION="${IMAGE_VERSION_LOWER}" ;;
+            *)  TARBALL_VERSION="v${IMAGE_VERSION_LOWER}" ;;
         esac
         TARBALL_FILENAME="cambium-fiber-api-${TARBALL_VERSION}.tar.gz"
         TARBALL_URL="${RELEASES_URL}/${TARBALL_VERSION}/${TARBALL_FILENAME}"
