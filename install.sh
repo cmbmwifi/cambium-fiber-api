@@ -10,6 +10,7 @@ DEFAULT_VERSION="latest"
 DEFAULT_PORT="8192"
 YES_TO_ALL=false
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+DIST_REPO_URL="https://raw.githubusercontent.com/cmbmwifi/cambium-fiber-api/refs/heads/main"
 
 # Load .env if it exists (for non-interactive installs)
 if [ -f "$SCRIPT_DIR/.env" ]; then
@@ -86,8 +87,7 @@ create_install_dir() {
 download_compose_file() {
     print_info "Downloading docker-compose.yml..."
 
-    # TODO: Replace with actual repository URL
-    COMPOSE_URL="https://raw.githubusercontent.com/USERNAME/REPO/main/docker-compose.yml"
+    COMPOSE_URL="${DIST_REPO_URL}/docker-compose.yml"
 
         cat > "${COMPOSE_FILE}" << 'EOF'
 version: '3.8'
@@ -264,6 +264,53 @@ prompt_docs_auth() {
     echo ""
 }
 
+create_connections_example_file() {
+    # If the example file already exists in INSTALL_DIR (e.g. from a prior step), keep it.
+    [ -f "${INSTALL_DIR}/connections.json.example" ] && return 0
+
+    # Prefer a local copy alongside the script (tarball install).
+    if [ -f "$SCRIPT_DIR/connections.json.example" ]; then
+        cp "$SCRIPT_DIR/connections.json.example" "${INSTALL_DIR}/connections.json.example"
+        return 0
+    fi
+
+    # When run via 'curl | bash' there is no local file — write the default inline.
+    print_info "Writing default connections.json.example..."
+    cat > "${INSTALL_DIR}/connections.json.example" << 'EOF'
+{
+  "docs_auth": {
+    "username": "admin",
+    "password_hash": "$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5GyWpRE8z.jSS"
+  },
+  "health": {
+    "connection_timeout": 2,
+    "retry_interval": 30,
+    "success_threshold": 10
+  },
+  "groups": [],
+  "virtual_stacks": [],
+  "olts": [],
+  "cache_ttl": {
+    "bulk_ttl": 3600,
+    "single_ttl": 30
+  },
+  "jwt_secret": "REPLACE_WITH_RANDOM_SECRET_IN_PRODUCTION",
+  "oauth": {
+    "clients": [
+      {
+        "client_id": "example-admin",
+        "client_secret": "password",
+        "client_secret_hash": "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8",
+        "scopes": ["admin"],
+        "enabled": true,
+        "description": "Example admin client for validation tests (default secret: 'password' - change in production)"
+      }
+    ]
+  }
+}
+EOF
+}
+
 create_connections_file() {
     print_info "Creating connections configuration file..."
 
@@ -348,14 +395,30 @@ load_or_pull_image() {
             docker tag "cambium-fiber-api:${TARBALL_VERSION}" "${CAMBIUM_API_IMAGE}"
         fi
     else
-        print_warn "No local tarball found - pulling from registry"
-        print_info "Pulling Docker image..."
+        # Derive tarball name and try to download from the distribution repo.
+        # VERSION may include a 'v' prefix already; normalise to vX.Y.Z.
+        IMAGE_VERSION="${CAMBIUM_API_IMAGE#*:}"
+        case "${IMAGE_VERSION}" in
+            v*) TARBALL_VERSION="${IMAGE_VERSION}" ;;
+            *)  TARBALL_VERSION="v${IMAGE_VERSION}" ;;
+        esac
+        TARBALL_FILENAME="cambium-fiber-api-${TARBALL_VERSION}.tar.gz"
+        TARBALL_URL="${DIST_REPO_URL}/${TARBALL_FILENAME}"
+        TARBALL_DEST="${INSTALL_DIR}/${TARBALL_FILENAME}"
 
-        if docker pull "${CAMBIUM_API_IMAGE}"; then
-            print_info "Image pulled successfully"
+        print_info "Downloading Docker image from GitHub..."
+        print_info "  ${TARBALL_URL}"
+
+        if curl -fsSL --progress-bar "${TARBALL_URL}" -o "${TARBALL_DEST}"; then
+            print_info "Download complete"
+            print_info "Loading Docker image from tarball..."
+            docker load -i "${TARBALL_DEST}"
+            print_info "Image loaded successfully"
+            rm -f "${TARBALL_DEST}"  # save disk space after load
         else
-            print_error "Failed to pull image from registry"
-            print_info "Please download the tarball manually or check registry access"
+            print_error "Failed to download image from ${TARBALL_URL}"
+            print_info "Check the version (entered: ${IMAGE_VERSION}) matches a published release."
+            print_info "Browse available files: https://github.com/cmbmwifi/cambium-fiber-api"
             exit 1
         fi
     fi
@@ -599,6 +662,12 @@ print_success() {
 
 # Main installation flow
 main() {
+    # When piped (e.g. curl | bash), bash reads the script from stdin, leaving read
+    # commands with EOF. Redirect stdin from /dev/tty so interactive prompts work.
+    if [ ! -t 0 ]; then
+        exec </dev/tty
+    fi
+
     echo ""
     print_info "Cambium Fiber API - Linux Installer"
     print_info "===================================="
@@ -611,16 +680,7 @@ main() {
     create_env_file
     prompt_docs_auth
 
-    # Copy configuration template to installation directory
-    print_info "Copying configuration template..."
-    if [[ ! -f "$SCRIPT_DIR/connections.json.example" ]]; then
-        print_error "connections.json.example not found in $SCRIPT_DIR"
-        exit 1
-    fi
-    cp "$SCRIPT_DIR/connections.json.example" "$INSTALL_DIR/" || {
-        print_error "Failed to copy connections.json.example"
-        exit 1
-    }
+    create_connections_example_file
 
     create_connections_file
     check_existing_installation

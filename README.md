@@ -23,13 +23,13 @@ Unified REST API for managing fiber networks across multiple OLTs. Pre-configure
 ### Linux / macOS
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/cambiumnetworks/cambium-fiber-api/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/cmbmwifi/cambium-fiber-api/refs/heads/main/install.sh | bash
 ```
 
 ### Windows (PowerShell)
 
 ```powershell
-Invoke-WebRequest -Uri https://raw.githubusercontent.com/cambiumnetworks/cambium-fiber-api/main/install.ps1 -OutFile install.ps1; .\install.ps1
+Invoke-WebRequest -Uri https://raw.githubusercontent.com/cmbmwifi/cambium-fiber-api/refs/heads/main/install.ps1 -OutFile install.ps1; .\install.ps1
 ```
 
 ### Installation Process Overview
@@ -47,6 +47,14 @@ http://localhost:8192/validate
 ```
 
 Runs read-only tests against health endpoints, authentication, OLT connectivity, and ONU operations. Safe for production systems. See [VALIDATION.md](VALIDATION.md) for details.
+
+## API Development With Mock OLTs
+
+For hardware-free API development, demos, and CI workflows, use the standalone mock OLT repository:
+
+**https://github.com/cmbmwifi/cambium-fiber-mock-olt**
+
+That repository provides containerized mock Cambium Fiber OLTs with editable fixture files so you can control the starting device state for local development and integration testing.
 
 ## Managing the API
 
