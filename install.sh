@@ -440,6 +440,7 @@ load_or_pull_image() {
             print_info "Download complete"
             print_info "Loading Docker image from tarball..."
             docker load -i "${TARBALL_DEST}"
+            docker tag "cambium-fiber-api:current" "${CAMBIUM_API_IMAGE}" 2>/dev/null || true
             print_info "Image loaded successfully"
             rm -f "${TARBALL_DEST}"  # save disk space after load
         else
