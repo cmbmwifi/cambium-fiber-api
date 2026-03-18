@@ -11,6 +11,7 @@ DEFAULT_PORT="8192"
 YES_TO_ALL=false
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 DIST_REPO_URL="https://raw.githubusercontent.com/cmbmwifi/cambium-fiber-api/refs/heads/main"
+RELEASES_URL="https://github.com/cmbmwifi/cambium-fiber-api/releases/download"
 
 # Load .env if it exists (for non-interactive installs)
 if [ -f "$SCRIPT_DIR/.env" ]; then
@@ -403,7 +404,7 @@ load_or_pull_image() {
             *)  TARBALL_VERSION="v${IMAGE_VERSION}" ;;
         esac
         TARBALL_FILENAME="cambium-fiber-api-${TARBALL_VERSION}.tar.gz"
-        TARBALL_URL="${DIST_REPO_URL}/${TARBALL_FILENAME}"
+        TARBALL_URL="${RELEASES_URL}/${TARBALL_VERSION}/${TARBALL_FILENAME}"
         TARBALL_DEST="${INSTALL_DIR}/${TARBALL_FILENAME}"
 
         print_info "Downloading Docker image from GitHub..."
