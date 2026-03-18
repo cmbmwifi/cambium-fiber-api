@@ -150,6 +150,15 @@ create_env_file() {
         fi
     fi
 
+    # If suggested version is still 'latest', resolve it from the GitHub API so the prompt is useful
+    if [ "${SUGGESTED_VERSION}" = "latest" ]; then
+        RESOLVED_LATEST=$(curl -fsSL "https://api.github.com/repos/cmbmwifi/cambium-fiber-api/releases/latest" \
+            | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
+        if [ -n "${RESOLVED_LATEST}" ]; then
+            SUGGESTED_VERSION="${RESOLVED_LATEST}"
+        fi
+    fi
+
     # Check for environment variables, prompt if not set (non-interactive mode)
     if [ -n "${VERSION}" ]; then
         print_info "Using version from VERSION: ${VERSION}"
@@ -401,6 +410,21 @@ load_or_pull_image() {
         # (GitHub Release tags are always lowercased by make release).
         IMAGE_VERSION="${CAMBIUM_API_IMAGE#*:}"
         IMAGE_VERSION_LOWER=$(printf '%s' "${IMAGE_VERSION}" | tr 'A-Z' 'a-z')
+
+        # Resolve 'latest' to the actual latest release tag via GitHub API
+        if [ "${IMAGE_VERSION_LOWER}" = "latest" ]; then
+            print_info "Resolving latest release version from GitHub..."
+            RESOLVED=$(curl -fsSL "https://api.github.com/repos/cmbmwifi/cambium-fiber-api/releases/latest" \
+                | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
+            if [ -z "${RESOLVED}" ]; then
+                print_error "Could not resolve latest release from GitHub API."
+                print_info "Specify a version explicitly, e.g.: VERSION=v1.0.0-rc3 bash install.sh"
+                exit 1
+            fi
+            IMAGE_VERSION_LOWER="${RESOLVED}"
+            print_info "Latest release: ${IMAGE_VERSION_LOWER}"
+        fi
+
         case "${IMAGE_VERSION_LOWER}" in
             v*) TARBALL_VERSION="${IMAGE_VERSION_LOWER}" ;;
             *)  TARBALL_VERSION="v${IMAGE_VERSION_LOWER}" ;;
