@@ -166,7 +166,7 @@ create_env_file() {
         VERSION="${SUGGESTED_VERSION}"
         print_info "Using version: ${VERSION}"
     else
-        read -p "Enter version to install [${SUGGESTED_VERSION}]: " VERSION
+        read -p "Enter version to install [${SUGGESTED_VERSION}]: " VERSION </dev/tty
         VERSION=${VERSION:-$SUGGESTED_VERSION}
     fi
 
@@ -177,7 +177,7 @@ create_env_file() {
         PORT="${DEFAULT_PORT}"
         print_info "Using port: ${PORT}"
     else
-        read -p "Enter port to expose API [${DEFAULT_PORT}]: " PORT
+        read -p "Enter port to expose API [${DEFAULT_PORT}]: " PORT </dev/tty
         PORT=${PORT:-$DEFAULT_PORT}
     fi
 
@@ -213,7 +213,7 @@ prompt_docs_auth() {
         PROTECT_DOCS="Y"
     else
         echo "Press ENTER to protect endpoints (recommended)"
-        read -p "Or type exactly 'I understand the risk' to disable protection: " DISABLE_PROTECTION
+        read -p "Or type exactly 'I understand the risk' to disable protection: " DISABLE_PROTECTION </dev/tty
         if [ "${DISABLE_PROTECTION}" = "I understand the risk" ]; then
             PROTECT_DOCS="N"
         else
@@ -229,7 +229,7 @@ prompt_docs_auth() {
             DOCS_USER="admin"
             print_info "Using username: ${DOCS_USER}"
         else
-            read -p "Enter username for /docs and /setup [admin]: " DOCS_USER
+            read -p "Enter username for /docs and /setup [admin]: " DOCS_USER </dev/tty
             DOCS_USER=${DOCS_USER:-admin}
         fi
 
@@ -237,9 +237,9 @@ prompt_docs_auth() {
             DOCS_PASS="${DOCS_PASSWORD}"
             print_info "Using DOCS_PASSWORD from environment"
         else
-            read -sp "Enter password: " DOCS_PASS
+            read -sp "Enter password: " DOCS_PASS </dev/tty
             echo ""
-            read -sp "Confirm password: " DOCS_PASS_CONFIRM
+            read -sp "Confirm password: " DOCS_PASS_CONFIRM </dev/tty
             echo ""
 
             if [ "${DOCS_PASS}" != "${DOCS_PASS_CONFIRM}" ]; then
@@ -690,11 +690,10 @@ print_success() {
 
 # Main installation flow
 main() {
-    # When piped (e.g. curl | bash), bash reads the script from stdin, leaving read
-    # commands with EOF. Redirect stdin from /dev/tty so interactive prompts work.
-    if [ ! -t 0 ]; then
-        exec </dev/tty
-    fi
+    # When piped (e.g. curl | bash), bash's stdin is the pipe (EOF after download).
+    # Each read below uses </dev/tty explicitly so the global stdin is never changed
+    # (a global exec </dev/tty would leave bash appearing interactive after the script
+    # finishes, requiring Ctrl+C to get the prompt back).
 
     echo ""
     print_info "Cambium Fiber API - Linux Installer"
