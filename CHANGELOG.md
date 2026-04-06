@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+
+## [1.0.0-RC4] - 2026-03-30
+
+- Official support for Python 3.13
+- Improved installation and upgrade reliability
+- Better version and environment management
+- General stability improvements
+
+### Build & Deployment
+- Dockerfile optimizations: moved ARG VERSION, improved build caching
+- Docker Compose: force-recreate for env reload, dropped obsolete version field
+- Auto-derive version from git tag, sync APP_VERSION across container and environment
+- Fixed VERSION/COMPOSE_PROJECT_NAME handling in build flow
+
+### Install & Scripts
+- Improved install scripts for reliability and environment consistency
+- Miscellaneous fixes to Makefile and integration test scripts
+
+---
+
+## [1.0.0-RC3] - 2026-03-18
+
+- More reliable installation process
+- Easier to use release packages
+- Improved test coverage and simulation
+- Minor documentation and config updates
+
+### Install & Release
+- Fix install script terminal hang by using per-read /dev/tty redirects
+- Re-tag loaded Docker image to CAMBIUM_API_IMAGE after download
+- Resolve 'latest' version via GitHub API, fix installer URL case normalization
+- Lowercase version in __version__.py, use GitHub Releases for tarball
+
+### Developer Experience
+- Added IDEAS.md for future improvements
+- Limited commit hook to olt-rest-api directory
+
+### Test Infrastructure
+- Replaced FixtureTransport with mock OLT containers for integration tests
+- Added fast_reply marker and static IPs to docker-compose
+- Various test and config updates
+
 ## [1.0.0-RC2] - 2026-03-11
 
 ### Polish, Observability, & Error Handling

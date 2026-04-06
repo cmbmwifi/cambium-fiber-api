@@ -4,6 +4,7 @@ Provides pytest fixtures for production API testing with real OAuth authenticati
 Tests run against deployed API instances using environment configuration.
 """
 
+import json
 import os
 import sys
 from typing import Any, Generator
@@ -11,9 +12,63 @@ from typing import Any, Generator
 import pytest
 import requests
 
+
+def _load_connections_credentials() -> tuple[str | None, str | None]:
+    """Load OAuth client_id and plaintext client_secret from connections.json.
+
+    Searches for connections.json starting from the project root (two levels up
+    from pub/tests/).  Only clients that have a plaintext ``client_secret``
+    field *and* are enabled are considered, since the test runner must post the
+    plaintext to /api/v2/access/token.
+
+    Returns:
+        (client_id, client_secret) tuple, or (None, None) when not found.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.normpath(os.path.join(here, "..", "..", "connections.json")),
+        os.path.normpath(os.path.join(here, "connections.json")),
+    ]
+    for path in candidates:
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path) as fh:
+                config = json.load(fh)
+            clients = config.get("oauth", {}).get(
+                "clients", config.get("oauth_clients", [])
+            )
+            for client in clients:
+                if client.get("enabled", True) and "client_secret" in client:
+                    return client["client_id"], client["client_secret"]
+        except Exception:
+            pass
+    return None, None
+
+
 # Ensure test root is on path so step definitions can be imported
 sys.path.insert(0, os.path.dirname(__file__))
 from steps import production_steps  # noqa: F401
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
+    """Convert skipped tests to failures — skips are never allowed.
+
+    A skip means something is broken or misconfigured. Every skip is a real
+    failure and must be treated as such so the validation suite always reflects
+    the true state of the deployment.
+    """
+    outcome = yield
+    rep = outcome.get_result()
+    # Unconditionally promote any skip to a failure.
+    if rep.skipped:
+        if isinstance(rep.longrepr, tuple):
+            _, _, reason = rep.longrepr
+        else:
+            reason = str(rep.longrepr)
+        rep.outcome = "failed"
+        rep.longrepr = f"SKIP PROMOTED TO FAIL — {reason}"
 
 
 @pytest.fixture(scope="session")
@@ -43,24 +98,33 @@ def oauth_client_id() -> str | None:
         - Returns None if not set, allowing non-authenticated tests to run
         - Tests requiring OAuth will fail with clear message when requesting token
     """
-    return os.getenv("OAUTH_CLIENT_ID")
+    env_id = os.getenv("OAUTH_CLIENT_ID")
+    if env_id:
+        return env_id
+    conn_id, _ = _load_connections_credentials()
+    return conn_id
 
 
 @pytest.fixture(scope="session")
 def oauth_client_secret() -> str | None:
-    """Get OAuth client secret from environment.
+    """Get OAuth client secret from environment or connections.json.
 
     Returns:
         OAuth client secret for authentication, or None if not set
 
     Environment Variables:
-        OAUTH_CLIENT_SECRET: OAuth 2.0 client secret (optional)
+        OAUTH_CLIENT_SECRET: OAuth 2.0 client secret (optional, overrides
+        the value read from connections.json)
 
     Notes:
-        - Returns None if not set, allowing non-authenticated tests to run
-        - Tests requiring OAuth will fail with clear message when requesting token
+        - Falls back to the plaintext ``client_secret`` in connections.json
+        - Returns None if no credential source is available
     """
-    return os.getenv("OAUTH_CLIENT_SECRET")
+    env_secret = os.getenv("OAUTH_CLIENT_SECRET")
+    if env_secret:
+        return env_secret
+    _, conn_secret = _load_connections_credentials()
+    return conn_secret
 
 
 @pytest.fixture(scope="session")
@@ -82,7 +146,7 @@ def oauth_token(
         AssertionError: If token acquisition fails
     """
     if not oauth_client_id or not oauth_client_secret:
-        pytest.skip(
+        pytest.fail(
             "OAuth credentials not provided. Set OAUTH_CLIENT_ID and "
             "OAUTH_CLIENT_SECRET environment variables. "
             "See pub/tests/README.md for setup instructions."
@@ -99,7 +163,7 @@ def oauth_token(
     )
 
     if response.status_code == 401:
-        pytest.skip(
+        pytest.fail(
             "OAuth credentials provided via OAUTH_CLIENT_ID/OAUTH_CLIENT_SECRET "
             "were rejected by /api/v2/access/token (401). "
             "Update the environment credentials to match the deployed API."

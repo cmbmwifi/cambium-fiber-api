@@ -38,12 +38,12 @@ def api_is_running(api_base_url: str) -> None:
     try:
         response = requests.get(f"{api_base_url}/health", timeout=5)
         if response.status_code != 200:
-            pytest.skip(
+            pytest.fail(
                 f"API not running at {api_base_url} (status: {response.status_code}). "
                 "Validation tests require a deployed API instance."
             )
     except requests.RequestException as e:
-        pytest.skip(
+        pytest.fail(
             f"API not accessible at {api_base_url}: {e}. "
             "Validation tests require a deployed API instance."
         )
@@ -62,7 +62,7 @@ def have_olts(api_client: requests.Session, test_context: dict) -> None:
     assert response.status_code == 200, f"Failed to list OLTs: {response.status_code}"
     olt_ids = response.json()
     if len(olt_ids) == 0:
-        pytest.skip("No OLTs configured - add OLTs via /setup to enable this test")
+        pytest.fail("No OLTs configured - add OLTs via /setup to enable this test")
     test_context["olt_ids"] = olt_ids
 
 
@@ -73,7 +73,7 @@ def have_onus(api_client: requests.Session, test_context: dict) -> None:
     assert response.status_code == 200, f"Failed to list ONUs: {response.status_code}"
     onus = response.json()
     if len(onus) == 0:
-        pytest.skip(
+        pytest.fail(
             "No ONUs configured - add OLTs with ONUs via /setup to enable this test"
         )
     test_context["onus"] = onus
@@ -88,12 +88,8 @@ def have_onus(api_client: requests.Session, test_context: dict) -> None:
 def have_valid_credentials(
     oauth_client_id: str | None, oauth_client_secret: str | None, test_context: dict
 ) -> None:
-    """Store valid OAuth credentials."""
-    if not oauth_client_id or not oauth_client_secret:
-        pytest.skip(
-            "OAuth credentials not provided. Set OAUTH_CLIENT_ID and "
-            "OAUTH_CLIENT_SECRET environment variables."
-        )
+    """Store valid OAuth credentials from centralized fixtures."""
+    # The fixtures will fail with a clear message if credentials are missing
     test_context["client_id"] = oauth_client_id
     test_context["client_secret"] = oauth_client_secret
 
@@ -122,14 +118,14 @@ def request_access_token(api_base_url: str, test_context: dict) -> None:
             response.status_code == 401
             and test_context.get("client_id") != "invalid_client_id"
         ):
-            pytest.skip(
+            pytest.fail(
                 "OAuth credentials provided for production validation were "
                 "rejected by /api/v2/access/token (401). "
                 "Update OAUTH_CLIENT_ID/OAUTH_CLIENT_SECRET to match the target API."
             )
         test_context["response"] = response
     except requests.RequestException as e:
-        pytest.skip(
+        pytest.fail(
             f"API not accessible at {api_base_url}: {e}. "
             "Validation tests require a deployed API instance."
         )
@@ -175,7 +171,7 @@ def make_unauthenticated_request(
         response = requests.get(f"{api_base_url}{endpoint}", timeout=10)
         test_context["response"] = response
     except requests.RequestException as e:
-        pytest.skip(
+        pytest.fail(
             f"API not accessible at {api_base_url}: {e}. "
             "Validation tests require a deployed API instance."
         )
@@ -737,7 +733,7 @@ def check_has_olt_ids(test_context: dict) -> None:
     response = get_context(test_context, "response")
     data = response.json()
     if len(data) == 0:
-        pytest.skip("No OLTs configured - add OLTs via /setup to enable this test")
+        pytest.fail("No OLTs configured - add OLTs via /setup to enable this test")
 
 
 @then("each OLT ID should be a string")
@@ -757,7 +753,7 @@ def check_onus_have_field(test_context: dict, field: str) -> None:
     response = get_context(test_context, "response")
     data = response.json()
     if len(data) == 0:
-        pytest.skip("No ONUs in response - add OLTs with ONUs to enable this test")
+        pytest.fail("No ONUs in response - add OLTs with ONUs to enable this test")
     for onu in data:
         assert field in onu, f"ONU missing '{field}' field: {onu}"
 
