@@ -465,9 +465,44 @@ function Import-DockerImage {
             docker tag "cambium-fiber-api:$tarballVersion" $desiredImage
         }
     } else {
-        Write-ColorOutput "No local tarball -- pulling from registry..." -Level WARN
-        docker pull $desiredImage
-        if ($LASTEXITCODE -ne 0) { Write-ColorOutput "Failed to pull image" -Level ERROR; exit 1 }
+        $imageVersion = ($desiredImage -split ":")[1]
+        if (-not $imageVersion) { $imageVersion = "latest" }
+        $versionLower = $imageVersion.ToLower()
+
+        if ($versionLower -eq "latest") {
+            Write-ColorOutput "Resolving latest release version from GitHub..." -Level INFO
+            try {
+                $release = Invoke-RestMethod -Uri "https://api.github.com/repos/cmbmwifi/cambium-fiber-api/releases/latest" -TimeoutSec 10
+                $versionLower = $release.tag_name
+                Write-ColorOutput "Latest release: $versionLower" -Level INFO
+            } catch {
+                Write-ColorOutput "Could not resolve latest release from GitHub API." -Level ERROR
+                Write-ColorOutput "Specify a version explicitly, e.g.: .\install.ps1 -Version v1.0.0-rc5" -Level INFO
+                exit 1
+            }
+        }
+
+        if ($versionLower -notmatch "^v") { $versionLower = "v$versionLower" }
+        $releasesUrl = "https://github.com/cmbmwifi/cambium-fiber-api/releases/download"
+        $tarballFilename = "cambium-fiber-api-$versionLower.tar.gz"
+        $tarballUrl = "$releasesUrl/$versionLower/$tarballFilename"
+        $tarballDest = Join-Path $InstallDir $tarballFilename
+
+        Write-ColorOutput "Downloading Docker image from GitHub..." -Level INFO
+        Write-ColorOutput "  $tarballUrl" -Level INFO
+        try {
+            Invoke-WebRequest -Uri $tarballUrl -OutFile $tarballDest -UseBasicParsing
+        } catch {
+            Write-ColorOutput "Failed to download image from GitHub Releases" -Level ERROR
+            Write-ColorOutput "  URL: $tarballUrl" -Level INFO
+            exit 1
+        }
+        Write-ColorOutput "Download complete" -Level INFO
+        Write-ColorOutput "Loading Docker image from tarball..." -Level INFO
+        docker load -i $tarballDest
+        if ($LASTEXITCODE -ne 0) { Write-ColorOutput "Failed to load image" -Level ERROR; exit 1 }
+        docker tag "cambium-fiber-api:current" $desiredImage 2>$null
+        Remove-Item $tarballDest -ErrorAction SilentlyContinue
     }
     Write-ColorOutput "Image ready" -Level INFO
 }
