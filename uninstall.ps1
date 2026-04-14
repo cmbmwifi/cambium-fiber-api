@@ -3,281 +3,193 @@
 # Usage: .\uninstall.ps1
 
 param(
-    [string]$InstallDir = "$env:LOCALAPPDATA\Cambium\cambium-fiber-api"
+    [string]$InstallDir = "$env:ProgramData\Cambium\cambium-fiber-api"
 )
 
-# Configuration
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    Write-Host "This script requires PowerShell 7 or newer (current: $($PSVersionTable.PSVersion))." -ForegroundColor Red
+    Write-Host "Install PowerShell 7: https://learn.microsoft.com/en-us/powershell/scripting/install/install-powershell-on-windows" -ForegroundColor Yellow
+    exit 1
+}
+
 $ContainerName = "cambium-fiber-api"
 $ImageName = "cambium-fiber-api"
 
-# Functions
+# --- Windows Forms GUI (always available on Windows) ---
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+[System.Windows.Forms.Application]::EnableVisualStyles()
+$script:HAS_GUI = $true
+
+# ============================================================
+# UI helpers
+# ============================================================
+
+function UI-Banner {
+    param([string]$Title, [string]$Subtitle)
+    $msg = $Title
+    if ($Subtitle) { $msg += "`n`n$Subtitle" }
+    [System.Windows.Forms.MessageBox]::Show($msg, "Cambium Fiber API",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+}
+
+function UI-Confirm {
+    param([string]$Prompt, [bool]$DefaultYes = $false)
+    $result = [System.Windows.Forms.MessageBox]::Show($Prompt, "Cambium Fiber API",
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Question)
+    return ($result -eq [System.Windows.Forms.DialogResult]::Yes)
+}
+
 function Write-ColorOutput {
-    param(
-        [Parameter(Mandatory=$true)]
-        [string]$Message,
-        [Parameter(Mandatory=$false)]
-        [string]$Level = "INFO"
-    )
-
-    $color = switch($Level) {
-        "ERROR" { "Red" }
-        "WARN"  { "Yellow" }
-        "INFO"  { "Green" }
-        default { "White" }
-    }
-
+    param([Parameter(Mandatory=$true)][string]$Message, [string]$Level = "INFO")
+    $color = switch($Level) { "ERROR" { "Red" } "WARN" { "Yellow" } "INFO" { "Green" } default { "White" } }
     Write-Host "[$Level] $Message" -ForegroundColor $color
 }
 
 function Confirm-Action {
-    param(
-        [Parameter(Mandatory=$true)]
-        [string]$Prompt,
-        [Parameter(Mandatory=$false)]
-        [string]$Default = "N"
-    )
-
-    if ($Default -eq "Y") {
-        $promptText = "$Prompt [Y/n]: "
-        $defaultResponse = "Y"
-    }
-    else {
-        $promptText = "$Prompt [y/N]: "
-        $defaultResponse = "N"
-    }
-
-    $response = Read-Host $promptText
-    if ([string]::IsNullOrWhiteSpace($response)) {
-        $response = $defaultResponse
-    }
-
-    return ($response -match '^[yY]')
+    param([Parameter(Mandatory=$true)][string]$Prompt, [string]$Default = "N")
+    return UI-Confirm -Prompt $Prompt -DefaultYes ($Default -eq "Y")
 }
+
+# ============================================================
+# Docker helpers
+# ============================================================
 
 function Test-DockerAvailable {
     try {
         docker --version | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            return $false
-        }
-
+        if ($LASTEXITCODE -ne 0) { return $false }
         docker info | Out-Null
         if ($LASTEXITCODE -ne 0) {
-            Write-ColorOutput "Docker daemon not running - some cleanup may be skipped" -Level WARN
+            Write-ColorOutput "Docker daemon not running -- some cleanup may be skipped" -Level WARN
             return $false
         }
-
         return $true
-    }
-    catch {
-        Write-ColorOutput "Docker command not found - assuming already uninstalled" -Level WARN
+    } catch {
+        Write-ColorOutput "Docker command not found -- assuming already uninstalled" -Level WARN
         return $false
     }
 }
 
+# ============================================================
+# Removal functions
+# ============================================================
+
 function Stop-AndRemoveContainer {
     Write-ColorOutput "Checking for running containers..." -Level INFO
+    if (-not (Test-DockerAvailable)) { return }
 
-    if (-not (Test-DockerAvailable)) {
-        Write-ColorOutput "Skipping container removal (Docker not available)" -Level WARN
-        return
-    }
-
-    # Check if container exists
     $containerExists = docker ps -a --format "{{.Names}}" | Where-Object { $_ -eq $ContainerName }
-
     if ($containerExists) {
         Write-ColorOutput "Stopping and removing container: $ContainerName" -Level INFO
-
-        # Stop container if running
-        $containerRunning = docker ps --format "{{.Names}}" | Where-Object { $_ -eq $ContainerName }
-        if ($containerRunning) {
-            docker stop $ContainerName 2>&1 | Out-Null
-        }
-
-        # Remove container
+        $running = docker ps --format "{{.Names}}" | Where-Object { $_ -eq $ContainerName }
+        if ($running) { docker stop $ContainerName 2>&1 | Out-Null }
         docker rm $ContainerName 2>&1 | Out-Null
-
         Write-ColorOutput "Container removed" -Level INFO
-    }
-    else {
-        Write-ColorOutput "Container not found (already removed or never created)" -Level INFO
+    } else {
+        Write-ColorOutput "Container not found (already removed)" -Level INFO
     }
 
-    # Check and remove orphaned volumes
-    Write-ColorOutput "Checking for Docker volumes..." -Level INFO
     $volumes = docker volume ls --format "{{.Name}}" | Where-Object { $_ -match 'cambium.*api' }
-
     if ($volumes) {
-        if (Confirm-Action -Prompt "Remove associated Docker volumes (data, logs, backups)?" -Default "Y") {
-            foreach ($volume in $volumes) {
-                Write-ColorOutput "Removing volume: $volume" -Level INFO
-                docker volume rm $volume 2>&1 | Out-Null
-            }
-        }
-        else {
-            Write-ColorOutput "Keeping Docker volumes" -Level INFO
+        foreach ($v in $volumes) {
+            Write-ColorOutput "Removing volume: $v" -Level INFO
+            docker volume rm $v 2>&1 | Out-Null
         }
     }
 }
 
 function Remove-DockerImages {
-    if (-not (Test-DockerAvailable)) {
-        Write-ColorOutput "Skipping image removal (Docker not available)" -Level WARN
-        return
-    }
-
-    # Check if image exists (any tag)
+    if (-not (Test-DockerAvailable)) { return }
     $images = docker images $ImageName --format "{{.Repository}}" | Where-Object { $_ -eq $ImageName }
-
     if ($images) {
-        Write-Host ""
-        Write-ColorOutput "Docker image(s) found:" -Level WARN
-        docker images $ImageName --format "  - {{.Repository}}:{{.Tag}} ({{.Size}})" | ForEach-Object { Write-Host $_ }
-        Write-Host ""
-
-        if (Confirm-Action -Prompt "Remove Docker image(s)?" -Default "Y") {
-            Write-ColorOutput "Removing Docker images..." -Level INFO
-            $imageTags = docker images $ImageName --format "{{.Repository}}:{{.Tag}}"
-            foreach ($imageTag in $imageTags) {
-                docker rmi $imageTag 2>&1 | Out-Null
-            }
-            Write-ColorOutput "Docker image(s) removed" -Level INFO
-        }
-        else {
-            Write-ColorOutput "Keeping Docker image(s)" -Level INFO
-        }
-    }
-    else {
-        Write-ColorOutput "No Docker images found for $ImageName" -Level INFO
+        Write-ColorOutput "Removing Docker images..." -Level INFO
+        docker images $ImageName --format "{{.Repository}}:{{.Tag}}" | ForEach-Object { docker rmi $_ 2>&1 | Out-Null }
+        Write-ColorOutput "Images removed" -Level INFO
+    } else {
+        Write-ColorOutput "No images found for $ImageName" -Level INFO
     }
 }
 
 function Remove-DataDirectory {
     if (Test-Path $InstallDir) {
-        Write-Host ""
-        Write-ColorOutput "Installation directory found: $InstallDir" -Level WARN
-
-        # Show disk usage
+        Write-ColorOutput "Removing directory: $InstallDir" -Level INFO
         try {
-            $size = (Get-ChildItem -Path $InstallDir -Recurse -ErrorAction SilentlyContinue |
-                     Measure-Object -Property Length -Sum).Sum
-            $sizeMB = [math]::Round($size / 1MB, 2)
-            Write-ColorOutput "Directory size: $sizeMB MB" -Level INFO
+            Remove-Item -Path $InstallDir -Recurse -Force -ErrorAction Stop
+            Write-ColorOutput "Directory removed" -Level INFO
+        } catch {
+            Write-ColorOutput "Failed to remove directory: $_" -Level ERROR
         }
-        catch {
-            # Ignore errors calculating size
-        }
-
-        Write-Host ""
-        if (Confirm-Action -Prompt "Remove installation directory and all data?" -Default "Y") {
-            Write-ColorOutput "Removing $InstallDir..." -Level INFO
-
-            try {
-                Remove-Item -Path $InstallDir -Recurse -Force -ErrorAction Stop
-                Write-ColorOutput "Directory removed" -Level INFO
-            }
-            catch {
-                Write-ColorOutput "Failed to remove directory: $_" -Level ERROR
-                Write-ColorOutput "You may need to close any programs using files in this directory" -Level WARN
-            }
-        }
-        else {
-            Write-ColorOutput "Keeping installation directory" -Level INFO
-            Write-ColorOutput "You can manually remove it later with: Remove-Item -Path '$InstallDir' -Recurse -Force" -Level INFO
-        }
-    }
-    else {
-        Write-ColorOutput "Installation directory not found (already removed or never created)" -Level INFO
+    } else {
+        Write-ColorOutput "Directory not found (already removed)" -Level INFO
     }
 }
 
-function Write-Summary {
-    Write-Host ""
-    Write-ColorOutput "================================================================" -Level INFO
-    Write-ColorOutput "  Cambium Fiber API Uninstallation Complete" -Level INFO
-    Write-ColorOutput "================================================================" -Level INFO
-    Write-Host ""
-    Write-ColorOutput "Summary:" -Level INFO
+# ============================================================
+# Summary
+# ============================================================
 
-    # Check what remains
+function Write-Summary {
     $remainsCount = 0
+    $lines = @()
 
     $containerExists = $null
     if (Test-DockerAvailable) {
         $containerExists = docker ps -a --format "{{.Names}}" 2>$null | Where-Object { $_ -eq $ContainerName }
     }
-
-    if ($containerExists) {
-        Write-ColorOutput "  ✗ Container still exists: $ContainerName" -Level WARN
-        $remainsCount++
-    }
-    else {
-        Write-ColorOutput "  ✓ Container removed" -Level INFO
-    }
+    if ($containerExists) { $lines += "Container still exists: $ContainerName"; $remainsCount++ }
+    else { $lines += "Container removed" }
 
     $imageExists = $null
     if (Test-DockerAvailable) {
         $imageExists = docker images --format "{{.Repository}}" 2>$null | Where-Object { $_ -eq $ImageName }
     }
+    if ($imageExists) { $lines += "Image still exists: $ImageName"; $remainsCount++ }
+    else { $lines += "Image removed" }
 
-    if ($imageExists) {
-        Write-ColorOutput "  ✗ Docker image still exists: $ImageName" -Level WARN
-        $remainsCount++
-    }
-    else {
-        Write-ColorOutput "  ✓ Docker image removed" -Level INFO
-    }
+    if (Test-Path $InstallDir) { $lines += "Directory still exists: $InstallDir"; $remainsCount++ }
+    else { $lines += "Directory removed" }
 
-    if (Test-Path $InstallDir) {
-        Write-ColorOutput "  ✗ Installation directory still exists: $InstallDir" -Level WARN
-        $remainsCount++
-    }
-    else {
-        Write-ColorOutput "  ✓ Installation directory removed" -Level INFO
-    }
-
+    # Console output
     Write-Host ""
-
-    if ($remainsCount -eq 0) {
-        Write-ColorOutput "All components successfully removed" -Level INFO
-    }
-    else {
-        Write-ColorOutput "Some components were kept (by your choice or due to errors)" -Level WARN
-    }
-
+    foreach ($l in $lines) { Write-ColorOutput "  $l" -Level $(if ($l -match "still exists") { "WARN" } else { "INFO" }) }
     Write-Host ""
     Write-ColorOutput "Docker Desktop was not affected by this uninstallation" -Level INFO
-    Write-ColorOutput "================================================================" -Level INFO
+
+    # GUI dialog
+    if ($script:HAS_GUI) {
+        $msg = "Uninstallation Complete`n`n"
+        if ($remainsCount -eq 0) { $msg += "All components successfully removed." }
+        else { $msg += "Some components could not be removed.`n`n" + ($lines -join "`n") }
+        [System.Windows.Forms.MessageBox]::Show($msg, "Cambium Fiber API",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+    }
 }
 
-# Main uninstallation flow
+# ============================================================
+# Main
+# ============================================================
+
 function Main {
-    Write-Host ""
-    Write-ColorOutput "Cambium Fiber API - Windows Uninstaller" -Level INFO
-    Write-ColorOutput "======================================" -Level INFO
-    Write-Host ""
-
-    Write-ColorOutput "This will remove Cambium Fiber API from your system" -Level WARN
-    Write-Host ""
-
-    if (-not (Confirm-Action -Prompt "Continue with uninstallation?" -Default "Y")) {
+    if (-not (Confirm-Action -Prompt "Continue with the uninstallation?`n`nThis removes the API container and its local data only.`nNo changes will be made to the OLT, OSS/BSS, or subscribers." -Default "Y")) {
         Write-ColorOutput "Uninstallation cancelled" -Level INFO
         exit 0
     }
 
-    Write-Host ""
     Stop-AndRemoveContainer
     Remove-DockerImages
     Remove-DataDirectory
     Write-Summary
 }
 
-# Run main uninstallation
-try {
-    Main
-}
+try { Main }
 catch {
     Write-ColorOutput "Uninstallation failed: $_" -Level ERROR
+    [System.Windows.Forms.MessageBox]::Show("Uninstallation failed:`n`n$_", "Cambium Fiber API",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
     exit 1
 }

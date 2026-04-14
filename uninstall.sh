@@ -17,6 +17,15 @@ CONTAINER_NAME="cambium-fiber-api"
 IMAGE_NAME="cambium-fiber-api"
 YES_TO_ALL=false
 
+# --- UI helpers (whiptail → dialog → plain prompt fallback) ---
+HAS_WHIPTAIL=false
+HAS_DIALOG=false
+if command -v whiptail &> /dev/null; then
+    HAS_WHIPTAIL=true
+elif command -v dialog &> /dev/null; then
+    HAS_DIALOG=true
+fi
+
 # Functions
 print_info() {
     echo -e "${GREEN}[INFO]${NC} $1"
@@ -37,6 +46,29 @@ confirm() {
     if [ "$YES_TO_ALL" = true ]; then
         echo -e "${prompt} [auto-yes]"
         return 0
+    fi
+
+    local default_yes=false
+    if [ "$default" = "y" ]; then
+        default_yes=true
+    fi
+
+    if [ "$HAS_WHIPTAIL" = true ]; then
+        if [ "$default_yes" = true ]; then
+            whiptail --title "Uninstall" --yesno "$prompt" 14 74
+        else
+            whiptail --title "Uninstall" --defaultno --yesno "$prompt" 14 74
+        fi
+        return $?
+    elif [ "$HAS_DIALOG" = true ]; then
+        if [ "$default_yes" = true ]; then
+            dialog --title "Uninstall" --yesno "$prompt" 14 74
+        else
+            dialog --title "Uninstall" --defaultno --yesno "$prompt" 14 74
+        fi
+        local rc=$?
+        clear
+        return $rc
     fi
 
     if [ "$default" = "y" ]; then
@@ -129,14 +161,10 @@ stop_and_remove_container() {
     # Check and remove orphaned volumes
     print_info "Checking for Docker volumes..."
     if docker volume ls --format '{{.Name}}' | grep -qE 'cambium.*api'; then
-        if confirm "Remove associated Docker volumes (data, logs, backups)?" "y"; then
-            for volume in $(docker volume ls --format '{{.Name}}' | grep -E 'cambium.*api'); do
-                print_info "Removing volume: ${volume}"
-                docker volume rm "${volume}" 2>/dev/null || true
-            done
-        else
-            print_info "Keeping Docker volumes"
-        fi
+        for volume in $(docker volume ls --format '{{.Name}}' | grep -E 'cambium.*api'); do
+            print_info "Removing volume: ${volume}"
+            docker volume rm "${volume}" 2>/dev/null || true
+        done
     fi
 }
 
@@ -148,18 +176,9 @@ remove_docker_image() {
 
     # Check if image exists (any tag)
     if docker images --format '{{.Repository}}' | grep -q "^${IMAGE_NAME}$"; then
-        echo ""
-        print_warn "Docker image(s) found:"
-        docker images "${IMAGE_NAME}" --format "  - {{.Repository}}:{{.Tag}} ({{.Size}})"
-        echo ""
-
-        if confirm "Remove Docker image(s)?" "y"; then
-            print_info "Removing Docker images..."
-            docker rmi $(docker images "${IMAGE_NAME}" --format "{{.Repository}}:{{.Tag}}") 2>/dev/null || true
-            print_info "Docker image(s) removed"
-        else
-            print_info "Keeping Docker image(s)"
-        fi
+        print_info "Removing Docker images..."
+        docker rmi $(docker images "${IMAGE_NAME}" --format "{{.Repository}}:{{.Tag}}") 2>/dev/null || true
+        print_info "Docker image(s) removed"
     else
         print_info "No Docker images found for ${IMAGE_NAME}"
     fi
@@ -167,32 +186,17 @@ remove_docker_image() {
 
 remove_data_directory() {
     if [ -d "${INSTALL_DIR}" ]; then
-        echo ""
-        print_warn "Installation directory found: ${INSTALL_DIR}"
+        print_info "Removing ${INSTALL_DIR}..."
 
-        # Show disk usage
-        if command -v du &> /dev/null; then
-            SIZE=$(du -sh "${INSTALL_DIR}" 2>/dev/null | cut -f1)
-            print_info "Directory size: ${SIZE}"
-        fi
-
-        echo ""
-        if confirm "Remove installation directory and all data?" "y"; then
-            print_info "Removing ${INSTALL_DIR}..."
-
-            # To delete a directory, check if parent directory is writable
-            PARENT_DIR=$(dirname "${INSTALL_DIR}")
-            if [ -w "${PARENT_DIR}" ]; then
-                rm -rf "${INSTALL_DIR}"
-            else
-                sudo rm -rf "${INSTALL_DIR}"
-            fi
-
-            print_info "Directory removed"
+        # To delete a directory, check if parent directory is writable
+        PARENT_DIR=$(dirname "${INSTALL_DIR}")
+        if [ -w "${PARENT_DIR}" ]; then
+            rm -rf "${INSTALL_DIR}"
         else
-            print_info "Keeping installation directory"
-            print_info "You can manually remove it later with: sudo rm -rf ${INSTALL_DIR}"
+            sudo rm -rf "${INSTALL_DIR}"
         fi
+
+        print_info "Directory removed"
     else
         print_info "Installation directory not found (already removed or never created)"
     fi
@@ -250,10 +254,14 @@ main() {
     print_info "======================================"
     echo ""
 
-    print_warn "This will remove Cambium Fiber API from your system"
-    echo ""
+    # Detect installed version from .env or container label
+    INSTALLED_VERSION="unknown"
+    if [ -f "${INSTALL_DIR}/.env" ]; then
+        _ver=$(grep '^APP_VERSION=' "${INSTALL_DIR}/.env" 2>/dev/null | head -1 | cut -d= -f2)
+        [ -n "$_ver" ] && INSTALLED_VERSION="$_ver"
+    fi
 
-    if ! confirm "Continue with uninstallation?" "y"; then
+    if ! confirm "Are you sure you want to uninstall the Cambium Fiber API version ${INSTALLED_VERSION} container?\n\nTo reinstall follow the directions at\nhttps://github.com/cmbmwifi/cambium-fiber-api" "y"; then
         print_info "Uninstallation cancelled"
         exit 0
     fi

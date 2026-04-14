@@ -3,31 +3,149 @@
 # Self-contained installer script for Docker-based deployment
 # Usage: bash install.sh [-y|--yes --password=PASSWORD] [--password=PASSWORD]
 
-set -e  # Exit on error
+set -eu
 
-# Configuration
+# --- Installer metadata ---
+export INSTALLER_VERSION="1.0.0"
+
+# --- Configuration defaults ---
 DEFAULT_VERSION="latest"
 DEFAULT_PORT="8192"
-YES_TO_ALL=false
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-DIST_REPO_URL="https://raw.githubusercontent.com/cmbmwifi/cambium-fiber-api/refs/heads/main"
+INSTALL_DIR="/opt/cambium-fiber-api"
+COMPOSE_FILE="${INSTALL_DIR}/docker-compose.yml"
+ENV_FILE="${INSTALL_DIR}/.env"
 RELEASES_URL="https://github.com/cmbmwifi/cambium-fiber-api/releases/download"
 
-# Load .env if it exists (for non-interactive installs)
-if [ -f "$SCRIPT_DIR/.env" ]; then
-    set -a  # Export all variables
-    source "$SCRIPT_DIR/.env"
-    set +a
-fi
+# --- Retry / timeout constants ---
+HEALTH_MAX_RETRIES=30
+HEALTH_RETRY_DELAY=2
+ENDPOINT_MAX_RETRIES=3
+CONTAINER_START_DELAY=5
+LOG_TAIL_LINES=30
+
+# --- Runtime state (initialised for set -u) ---
+YES_TO_ALL=false
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+VERSION="${VERSION:-}"
+API_PORT="${API_PORT:-}"
+DOCS_PASSWORD="${DOCS_PASSWORD:-}"
+DOCS_AUTH_ENABLED="${DOCS_AUTH_ENABLED:-}"
+DOCS_AUTH_USERNAME=""
+DOCS_AUTH_HASH=""
+DOCS_USERNAME="${DOCS_USERNAME:-}"
+OPEN_BROWSER="${OPEN_BROWSER:-}"
+CAMBIUM_API_PORT="${DEFAULT_PORT}"
 
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
-INSTALL_DIR="/opt/cambium-fiber-api"
-COMPOSE_FILE="${INSTALL_DIR}/docker-compose.yml"
-ENV_FILE="${INSTALL_DIR}/.env"
+
+# --- UI helpers (whiptail → dialog → plain prompt fallback) ---
+HAS_WHIPTAIL=false
+HAS_DIALOG=false
+if command -v whiptail &> /dev/null; then
+    HAS_WHIPTAIL=true
+elif command -v dialog &> /dev/null; then
+    HAS_DIALOG=true
+fi
+
+ui_msgbox() {
+    local title="$1"
+    local message="$2"
+    local height="${3:-12}"
+    local width="${4:-70}"
+    if [ "$HAS_WHIPTAIL" = true ]; then
+        whiptail --title "$title" --msgbox "$message" "$height" "$width"
+    elif [ "$HAS_DIALOG" = true ]; then
+        dialog --title "$title" --msgbox "$message" "$height" "$width"
+        clear
+    else
+        echo ""
+        echo "=== $title ==="
+        echo -e "$message"
+        echo ""
+    fi
+}
+
+ui_inputbox() {
+    local title="$1"
+    local prompt="$2"
+    local default="$3"
+    local height="${4:-10}"
+    local width="${5:-70}"
+    local result
+    if [ "$HAS_WHIPTAIL" = true ]; then
+        result=$(whiptail --title "$title" --inputbox "$prompt" "$height" "$width" "$default" 3>&1 1>&2 2>&3) || { echo "$default"; return; }
+    elif [ "$HAS_DIALOG" = true ]; then
+        result=$(dialog --title "$title" --inputbox "$prompt" "$height" "$width" "$default" 3>&1 1>&2 2>&3) || { echo "$default"; return; }
+        clear
+    else
+        read -rp "$prompt [$default]: " result </dev/tty
+        result=${result:-$default}
+    fi
+    echo "$result"
+}
+
+ui_passwordbox() {
+    local title="$1"
+    local prompt="$2"
+    local height="${3:-10}"
+    local width="${4:-70}"
+    local result
+    if [ "$HAS_WHIPTAIL" = true ]; then
+        result=$(whiptail --title "$title" --passwordbox "$prompt" "$height" "$width" 3>&1 1>&2 2>&3) || return 1
+    elif [ "$HAS_DIALOG" = true ]; then
+        result=$(dialog --title "$title" --insecure --passwordbox "$prompt" "$height" "$width" 3>&1 1>&2 2>&3) || return 1
+        clear
+    else
+        read -rsp "$prompt: " result </dev/tty
+        echo "" >&2
+    fi
+    echo "$result"
+}
+
+ui_yesno() {
+    local title="$1"
+    local prompt="$2"
+    local default_yes="${3:-true}"
+    local height="${4:-10}"
+    local width="${5:-70}"
+    if [ "$HAS_WHIPTAIL" = true ]; then
+        if [ "$default_yes" = true ]; then
+            whiptail --title "$title" --yesno "$prompt" "$height" "$width"
+        else
+            whiptail --title "$title" --defaultno --yesno "$prompt" "$height" "$width"
+        fi
+        return $?
+    elif [ "$HAS_DIALOG" = true ]; then
+        if [ "$default_yes" = true ]; then
+            dialog --title "$title" --yesno "$prompt" "$height" "$width"
+        else
+            dialog --title "$title" --defaultno --yesno "$prompt" "$height" "$width"
+        fi
+        local rc=$?
+        clear
+        return $rc
+    else
+        local yn_prompt
+        local default_response
+        if [ "$default_yes" = true ]; then
+            yn_prompt="$prompt [Y/n]: "
+            default_response="y"
+        else
+            yn_prompt="$prompt [y/N]: "
+            default_response="n"
+        fi
+        read -rp "$yn_prompt" response </dev/tty
+        response=${response:-$default_response}
+        case "$response" in
+            [yY][eE][sS]|[yY]) return 0 ;;
+            *) return 1 ;;
+        esac
+    fi
+}
 
 # Functions
 print_info() {
@@ -41,6 +159,22 @@ print_warn() {
 print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
+
+# --- Cleanup trap for partial installs ---
+cleanup() {
+    local exit_code=$?
+    if [[ $exit_code -ne 0 ]]; then
+        echo ""
+        print_warn "Installation did not complete successfully (exit code: ${exit_code})"
+        print_warn "Partial files may remain in ${INSTALL_DIR}"
+        if [[ -f "${COMPOSE_FILE}" ]]; then
+            if cd "${INSTALL_DIR}" 2>/dev/null; then
+                docker compose down 2>/dev/null || true
+            fi
+        fi
+    fi
+}
+trap cleanup EXIT
 
 check_docker() {
     print_info "Checking Docker installation..."
@@ -88,9 +222,7 @@ create_install_dir() {
 download_compose_file() {
     print_info "Downloading docker-compose.yml..."
 
-    COMPOSE_URL="${DIST_REPO_URL}/docker-compose.yml"
-
-        cat > "${COMPOSE_FILE}" << 'EOF'
+    cat > "${COMPOSE_FILE}" << 'EOF'
 services:
     cambium-fiber-api:
         image: ${CAMBIUM_API_IMAGE:-cambium-fiber-api:latest}
@@ -140,13 +272,13 @@ create_env_file() {
 
     # Check for local tarball to suggest version
     SUGGESTED_VERSION="${DEFAULT_VERSION}"
-    TARBALL=$(find "$SCRIPT_DIR" -maxdepth 1 -name "cambium-fiber-api-*.tar" -o -name "cambium-fiber-api-*.tar.gz" 2>/dev/null | head -n 1)
+    TARBALL=$(find "$SCRIPT_DIR" -maxdepth 1 \( -name "cambium-fiber-api-*.tar" -o -name "cambium-fiber-api-*.tar.gz" \) 2>/dev/null | head -n 1)
     if [ -n "${TARBALL}" ]; then
         # Extract version from tarball filename (e.g., cambium-fiber-api-1.0.0-beta.1.tar.gz -> 1.0.0-beta.1)
         DETECTED_VERSION=$(basename "${TARBALL}" | sed -n 's/cambium-fiber-api-\(.*\)\.tar\(\.gz\)\?$/\1/p')
         # 'current' is a dev build placeholder — read the real version from the VERSION file written by make build
         if [ "${DETECTED_VERSION}" = "current" ] && [ -f "${SCRIPT_DIR}/VERSION" ]; then
-            DETECTED_VERSION=$(cat "${SCRIPT_DIR}/VERSION" | tr -d '[:space:]')
+            DETECTED_VERSION=$(tr -d '[:space:]' < "${SCRIPT_DIR}/VERSION")
         fi
         if [ -n "${DETECTED_VERSION}" ] && [ "${DETECTED_VERSION}" != "dev" ] && [ "${DETECTED_VERSION}" != "current" ]; then
             SUGGESTED_VERSION="${DETECTED_VERSION}"
@@ -170,8 +302,9 @@ create_env_file() {
         VERSION="${SUGGESTED_VERSION}"
         print_info "Using version: ${VERSION}"
     else
-        read -p "Enter version to install [${SUGGESTED_VERSION}]: " VERSION </dev/tty
+        VERSION=$(ui_inputbox "Version" "Enter version to install:" "${SUGGESTED_VERSION}")
         VERSION=${VERSION:-$SUGGESTED_VERSION}
+        print_info "Using version: ${VERSION}"
     fi
 
     if [ -n "${API_PORT}" ]; then
@@ -181,8 +314,9 @@ create_env_file() {
         PORT="${DEFAULT_PORT}"
         print_info "Using port: ${PORT}"
     else
-        read -p "Enter port to expose API [${DEFAULT_PORT}]: " PORT </dev/tty
+        PORT=$(ui_inputbox "API Port" "Enter port to expose API:" "${DEFAULT_PORT}")
         PORT=${PORT:-$DEFAULT_PORT}
+        print_info "Using port: ${PORT}"
     fi
 
     # Compose project name must be lowercase alphanumeric/hyphens/underscores — strip v prefix and dots
@@ -206,9 +340,6 @@ EOF
 
 prompt_docs_auth() {
     print_info "Documentation Authentication Setup"
-    echo ""
-    print_warn "SECURITY: The /docs and /setup endpoints WILL be protected with HTTP Basic Authentication."
-    echo ""
 
     if [ -n "${DOCS_AUTH_ENABLED}" ]; then
         if [ "${DOCS_AUTH_ENABLED}" = "false" ]; then
@@ -221,12 +352,10 @@ prompt_docs_auth() {
     elif [ "$YES_TO_ALL" = true ]; then
         PROTECT_DOCS="Y"
     else
-        echo "Press ENTER to protect endpoints (recommended)"
-        read -p "Or type exactly 'I understand the risk' to disable protection: " DISABLE_PROTECTION </dev/tty
-        if [ "${DISABLE_PROTECTION}" = "I understand the risk" ]; then
-            PROTECT_DOCS="N"
-        else
+        if ui_yesno "Documentation Auth" "The /docs and /setup endpoints can be protected\nwith HTTP Basic Authentication.\n\nEnable authentication? (Recommended)" true; then
             PROTECT_DOCS="Y"
+        else
+            PROTECT_DOCS="N"
         fi
     fi
 
@@ -238,7 +367,7 @@ prompt_docs_auth() {
             DOCS_USER="admin"
             print_info "Using username: ${DOCS_USER}"
         else
-            read -p "Enter username for /docs and /setup [admin]: " DOCS_USER </dev/tty
+            DOCS_USER=$(ui_inputbox "Auth Username" "Enter username for /docs and /setup:" "admin")
             DOCS_USER=${DOCS_USER:-admin}
         fi
 
@@ -246,25 +375,28 @@ prompt_docs_auth() {
             DOCS_PASS="${DOCS_PASSWORD}"
             print_info "Using DOCS_PASSWORD from environment"
         else
-            read -sp "Enter password: " DOCS_PASS </dev/tty
-            echo ""
-            read -sp "Confirm password: " DOCS_PASS_CONFIRM </dev/tty
-            echo ""
-
-            if [ "${DOCS_PASS}" != "${DOCS_PASS_CONFIRM}" ]; then
-                print_error "Passwords do not match!"
-                exit 1
-            fi
-
-            if [ -z "${DOCS_PASS}" ]; then
-                print_error "Password cannot be empty!"
-                exit 1
-            fi
+            while true; do
+                DOCS_PASS=$(ui_passwordbox "Auth Password" "Enter password for documentation auth:")
+                if [ -z "${DOCS_PASS}" ]; then
+                    ui_msgbox "Error" "Password cannot be empty!" 8 50
+                    continue
+                fi
+                DOCS_PASS_CONFIRM=$(ui_passwordbox "Confirm Password" "Confirm password:")
+                if [ "${DOCS_PASS}" != "${DOCS_PASS_CONFIRM}" ]; then
+                    ui_msgbox "Error" "Passwords do not match! Please try again." 8 50
+                    continue
+                fi
+                break
+            done
         fi
 
         print_info "Generating password hash..."
 
-        DOCS_HASH=$(docker run --rm python:3.11-slim bash -c "pip install -q bcrypt && python -c \"import bcrypt; print(bcrypt.hashpw('${DOCS_PASS}'.encode('utf-8'), bcrypt.gensalt()).decode('utf-8'))\"" 2>/dev/null)
+        DOCS_HASH=$(DOCS_PASS="${DOCS_PASS}" docker run --rm -e DOCS_PASS python:3.11-slim \
+            bash -c 'pip install -q bcrypt >/dev/null 2>&1 && python3 -c "import os, bcrypt
+pwd = os.environ[\"DOCS_PASS\"].encode(\"utf-8\")
+print(bcrypt.hashpw(pwd, bcrypt.gensalt()).decode(\"utf-8\"))
+"' 2>/dev/null)
 
         if [ -z "${DOCS_HASH}" ]; then
             print_error "Failed to generate password hash"
@@ -350,33 +482,38 @@ create_connections_file() {
 
     cp "${INSTALL_DIR}/connections.json.example" "${CONNECTIONS_FILE}"
 
-    if [ "${DOCS_AUTH_ENABLED}" = "true" ]; then
+    if [[ "${DOCS_AUTH_ENABLED}" = "true" ]]; then
+        CFG_FILE="${CONNECTIONS_FILE}" \
+        AUTH_USER="${DOCS_AUTH_USERNAME}" \
+        AUTH_HASH="${DOCS_AUTH_HASH}" \
         python3 -c "
-import json
-import sys
+import json, os
 
-with open('${CONNECTIONS_FILE}', 'r') as f:
+filepath = os.environ['CFG_FILE']
+with open(filepath, 'r') as f:
     config = json.load(f)
 
 config['docs_auth'] = {
-    'username': '${DOCS_AUTH_USERNAME}',
-    'password_hash': '${DOCS_AUTH_HASH}'
+    'username': os.environ['AUTH_USER'],
+    'password_hash': os.environ['AUTH_HASH']
 }
 
-with open('${CONNECTIONS_FILE}', 'w') as f:
+with open(filepath, 'w') as f:
     json.dump(config, f, indent=2)
 "
         print_info "connections.json created with documentation authentication"
     else
+        CFG_FILE="${CONNECTIONS_FILE}" \
         python3 -c "
-import json
+import json, os
 
-with open('${CONNECTIONS_FILE}', 'r') as f:
+filepath = os.environ['CFG_FILE']
+with open(filepath, 'r') as f:
     config = json.load(f)
 
 config.pop('docs_auth', None)
 
-with open('${CONNECTIONS_FILE}', 'w') as f:
+with open(filepath, 'w') as f:
     json.dump(config, f, indent=2)
 "
         print_info "connections.json created (no authentication, will be configured via setup wizard)"
@@ -387,10 +524,11 @@ load_or_pull_image() {
     print_info "Checking for Docker image..."
 
     # Source env file to get desired IMAGE variable
+    # shellcheck source=/dev/null
     source "${ENV_FILE}"
 
     # Check if tarball exists in script directory
-    TARBALL=$(find "$SCRIPT_DIR" -maxdepth 1 -name "cambium-fiber-api-*.tar" -o -name "cambium-fiber-api-*.tar.gz" 2>/dev/null | head -n 1)
+    TARBALL=$(find "$SCRIPT_DIR" -maxdepth 1 \( -name "cambium-fiber-api-*.tar" -o -name "cambium-fiber-api-*.tar.gz" \) 2>/dev/null | head -n 1)
 
     if [ -n "${TARBALL}" ]; then
         print_info "Found local tarball: ${TARBALL}"
@@ -418,7 +556,7 @@ load_or_pull_image() {
         # VERSION may include a 'v' prefix already; normalise to vX.Y.Z lowercase
         # (GitHub Release tags are always lowercased by make release).
         IMAGE_VERSION="${CAMBIUM_API_IMAGE#*:}"
-        IMAGE_VERSION_LOWER=$(printf '%s' "${IMAGE_VERSION}" | tr 'A-Z' 'a-z')
+        IMAGE_VERSION_LOWER=$(printf '%s' "${IMAGE_VERSION}" | tr '[:upper:]' '[:lower:]')
 
         # Resolve 'latest' to the actual latest release tag via GitHub API
         if [ "${IMAGE_VERSION_LOWER}" = "latest" ]; then
@@ -463,12 +601,13 @@ load_or_pull_image() {
 
 validate_endpoint() {
     local url="$1"
-    local name="$2"
+    # shellcheck disable=SC2034
+    local name="$2"  # descriptive parameter for logging context
     local max_retries="${3:-3}"
     local acceptable_codes="${4:-200}"
     local retry_count=0
 
-    while [ $retry_count -lt $max_retries ]; do
+    while [ "$retry_count" -lt "$max_retries" ]; do
         response=$(curl -s -w "\n%{http_code}" "$url" 2>&1)
         http_code=$(echo "$response" | tail -n 1)
 
@@ -479,7 +618,7 @@ validate_endpoint() {
         done
 
         retry_count=$((retry_count + 1))
-        [ $retry_count -lt $max_retries ] && sleep 1
+        [ "$retry_count" -lt "$max_retries" ] && sleep 1
     done
     return 1
 }
@@ -487,8 +626,8 @@ validate_endpoint() {
 check_container_logs() {
     print_info "Checking container logs for errors..."
     echo ""
-    echo "==================== Last 30 Log Lines ===================="
-    docker logs --tail 30 cambium-fiber-api 2>&1
+    echo "==================== Last ${LOG_TAIL_LINES} Log Lines ===================="
+    docker logs --tail "${LOG_TAIL_LINES}" cambium-fiber-api 2>&1
     echo "==========================================================="
     echo ""
 }
@@ -532,6 +671,7 @@ check_existing_installation() {
     if docker ps -a --format '{{.Names}}' | grep -q '^cambium-fiber-api$'; then
         if docker ps --format '{{.Names}}' | grep -q '^cambium-fiber-api$'; then
             # Container is running
+            # shellcheck source=/dev/null
             source "${ENV_FILE}"
             print_warn "Cambium Fiber API is already installed and running"
             echo ""
@@ -545,7 +685,7 @@ check_existing_installation() {
         else
             # Container exists but is stopped - clean it up
             print_info "Found stopped container, removing it..."
-            cd "${INSTALL_DIR}"
+            cd "${INSTALL_DIR}" || exit 1
             docker compose down 2>/dev/null || true
             docker rm cambium-fiber-api 2>/dev/null || true
         fi
@@ -555,13 +695,14 @@ check_existing_installation() {
 start_container() {
     print_info "Starting Cambium Fiber API..."
 
-    cd "${INSTALL_DIR}"
+    cd "${INSTALL_DIR}" || exit 1
     docker compose --env-file "${ENV_FILE}" up -d
 
+    # shellcheck source=/dev/null
     source "${ENV_FILE}"
 
     print_info "Waiting for container to start..."
-    sleep 5
+    sleep "${CONTAINER_START_DELAY}"
 
     # Check if container is actually running
     if ! docker ps | grep -q cambium-fiber-api; then
@@ -579,17 +720,16 @@ start_container() {
     SETUP_OK=false
 
     # Wait for health endpoint with retry
-    MAX_RETRIES=30
     RETRY_COUNT=0
 
-    while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+    while [[ $RETRY_COUNT -lt $HEALTH_MAX_RETRIES ]]; do
         if validate_endpoint "http://localhost:${CAMBIUM_API_PORT}/health" "health" 1; then
             HEALTH_OK=true
             break
         fi
         RETRY_COUNT=$((RETRY_COUNT + 1))
         echo -n "."
-        sleep 2
+        sleep "${HEALTH_RETRY_DELAY}"
     done
     echo ""
 
@@ -607,14 +747,14 @@ start_container() {
         EXPECTED_DOCS_CODES="200,303,307,401"
     fi
 
-    if validate_endpoint "http://localhost:${CAMBIUM_API_PORT}/docs" "docs" 3 "${EXPECTED_DOCS_CODES}"; then
+    if validate_endpoint "http://localhost:${CAMBIUM_API_PORT}/docs" "docs" "${ENDPOINT_MAX_RETRIES}" "${EXPECTED_DOCS_CODES}"; then
         DOCS_OK=true
     else
         print_error "✗ /docs endpoint is not responding or returning errors"
         DOCS_OK=false
     fi
 
-    if validate_endpoint "http://localhost:${CAMBIUM_API_PORT}/setup" "setup" 3 "${EXPECTED_DOCS_CODES}"; then
+    if validate_endpoint "http://localhost:${CAMBIUM_API_PORT}/setup" "setup" "${ENDPOINT_MAX_RETRIES}" "${EXPECTED_DOCS_CODES}"; then
         SETUP_OK=true
     else
         print_error "✗ /setup endpoint is not responding or returning errors"
@@ -654,6 +794,7 @@ open_browser() {
         return
     fi
 
+    # shellcheck source=/dev/null
     source "${ENV_FILE}"
     SETUP_URL="http://localhost:${CAMBIUM_API_PORT}/setup"
 
@@ -668,6 +809,7 @@ open_browser() {
 }
 
 print_success() {
+    # shellcheck source=/dev/null
     source "${ENV_FILE}"
 
     # ANSI escape codes for hyperlinks (OSC 8)
@@ -708,6 +850,10 @@ main() {
     print_info "Cambium Fiber API - Linux Installer"
     print_info "===================================="
     echo ""
+
+    if [ "$HAS_WHIPTAIL" = true ] || [ "$HAS_DIALOG" = true ]; then
+        ui_msgbox "Cambium Fiber API" "Unified Stateless REST API for managing fiber networks across multiple OLTs. Pre-configure ONUs before deployment, track devices network-wide, and integrate with OSS/BSS platforms through a single endpoint.\n\nFor: ISPs, MSPs, and system integrators managing Cambium Fiber networks" 14 74
+    fi
 
     check_docker
     check_docker_compose

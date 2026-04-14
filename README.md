@@ -26,7 +26,7 @@ Unified REST API for managing fiber networks across multiple OLTs. Pre-configure
 curl -fsSL https://raw.githubusercontent.com/cmbmwifi/cambium-fiber-api/refs/heads/main/install.sh | bash
 ```
 
-### Windows (PowerShell)
+### Windows (PowerShell 7.x)
 
 ```powershell
 Invoke-WebRequest -Uri https://raw.githubusercontent.com/cmbmwifi/cambium-fiber-api/refs/heads/main/install.ps1 -OutFile install.ps1; .\install.ps1
@@ -63,7 +63,7 @@ That repository provides containerized mock Cambium Fiber OLTs with editable fix
 docker logs -f cambium-fiber-api
 
 # Stop/Start
-cd /opt/cambium-fiber-api  # or %LOCALAPPDATA%\Cambium\cambium-fiber-api on Windows
+cd /opt/cambium-fiber-api  # or %ProgramData%\Cambium\cambium-fiber-api on Windows
 docker-compose down
 docker-compose up -d
 

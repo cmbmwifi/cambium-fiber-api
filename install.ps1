@@ -5,8 +5,14 @@
 param(
     [string]$Version = "latest",
     [int]$Port = 8192,
-    [string]$InstallDir = "$env:LOCALAPPDATA\Cambium\cambium-fiber-api"
+    [string]$InstallDir = "$env:ProgramData\Cambium\cambium-fiber-api"
 )
+
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    Write-Host "This script requires PowerShell 7 or newer (current: $($PSVersionTable.PSVersion))." -ForegroundColor Red
+    Write-Host "Install PowerShell 7: https://learn.microsoft.com/en-us/powershell/scripting/install/install-powershell-on-windows" -ForegroundColor Yellow
+    exit 1
+}
 
 # Load .env if it exists (for non-interactive installs)
 if (Test-Path ".env") {
@@ -19,99 +25,319 @@ if (Test-Path ".env") {
     }
 }
 
-# Configuration
 $ComposeFile = "$InstallDir\docker-compose.yml"
 $EnvFile = "$InstallDir\.env"
 
-# Functions
-function Write-ColorOutput {
-    param(
-        [Parameter(Mandatory=$true)]
-        [string]$Message,
-        [Parameter(Mandatory=$false)]
-        [string]$Level = "INFO"
-    )
+# --- Windows Forms GUI (always available on Windows) ---
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+[System.Windows.Forms.Application]::EnableVisualStyles()
+$script:HAS_GUI = $true
 
-    $color = switch($Level) {
-        "ERROR" { "Red" }
-        "WARN"  { "Yellow" }
-        "INFO"  { "Green" }
-        default { "White" }
+# ============================================================
+# GUI: Single wizard form -- collects all inputs in one window
+# ============================================================
+
+function Show-InstallerWizard {
+    # Auto-detect version from local tarball
+    $suggestedVersion = $Version
+    $tarball = Get-ChildItem -Path . -Filter "cambium-fiber-api-*.tar*" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($tarball -and $tarball.Name -match "cambium-fiber-api-(.+)\.tar") {
+        $suggestedVersion = $Matches[1]
     }
 
+    # Skip wizard entirely if all values provided via env vars
+    if ($env:VERSION) { $suggestedVersion = $env:VERSION }
+    if ($env:API_PORT) { $Port = [int]$env:API_PORT }
+    if ($env:VERSION -and $env:API_PORT -and $env:DOCS_AUTH_ENABLED) {
+        return @{
+            Version  = $suggestedVersion
+            Port     = $Port
+            DocsAuth = ($env:DOCS_AUTH_ENABLED -ne "false")
+            Username = $(if ($env:DOCS_USERNAME) { $env:DOCS_USERNAME } else { "admin" })
+            Password = $(if ($env:DOCS_PASSWORD) { $env:DOCS_PASSWORD } else { "" })
+        }
+    }
+
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = "Cambium Fiber API Installer"
+    $form.Size = New-Object System.Drawing.Size(480, 430)
+    $form.StartPosition = "CenterScreen"
+    $form.FormBorderStyle = "FixedDialog"
+    $form.MaximizeBox = $false
+    $form.MinimizeBox = $false
+    $form.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+
+    $y = 15
+
+    # Header
+    $header = New-Object System.Windows.Forms.Label
+    $header.Text = "Cambium Fiber API"
+    $header.Font = New-Object System.Drawing.Font("Segoe UI", 14, [System.Drawing.FontStyle]::Bold)
+    $header.Location = New-Object System.Drawing.Point(15, $y)
+    $header.AutoSize = $true
+    $form.Controls.Add($header)
+    $y += 35
+
+    $sub = New-Object System.Windows.Forms.Label
+    $sub.Text = "Configure your installation settings below."
+    $sub.ForeColor = [System.Drawing.Color]::Gray
+    $sub.Location = New-Object System.Drawing.Point(15, $y)
+    $sub.AutoSize = $true
+    $form.Controls.Add($sub)
+    $y += 30
+
+    # Separator
+    $sep1 = New-Object System.Windows.Forms.Label
+    $sep1.BorderStyle = "Fixed3D"
+    $sep1.Location = New-Object System.Drawing.Point(15, $y)
+    $sep1.Size = New-Object System.Drawing.Size(430, 2)
+    $form.Controls.Add($sep1)
+    $y += 15
+
+    # Version
+    $lblV = New-Object System.Windows.Forms.Label
+    $lblV.Text = "Image version:"; $lblV.Location = New-Object System.Drawing.Point(15, $y); $lblV.AutoSize = $true
+    $form.Controls.Add($lblV)
+    $txtV = New-Object System.Windows.Forms.TextBox
+    $txtV.Text = $suggestedVersion; $txtV.Location = New-Object System.Drawing.Point(140, ($y - 3)); $txtV.Size = New-Object System.Drawing.Size(300, 23)
+    $form.Controls.Add($txtV)
+    $y += 35
+
+    # Port
+    $lblP = New-Object System.Windows.Forms.Label
+    $lblP.Text = "API port:"; $lblP.Location = New-Object System.Drawing.Point(15, $y); $lblP.AutoSize = $true
+    $form.Controls.Add($lblP)
+    $txtP = New-Object System.Windows.Forms.TextBox
+    $txtP.Text = "$Port"; $txtP.Location = New-Object System.Drawing.Point(140, ($y - 3)); $txtP.Size = New-Object System.Drawing.Size(100, 23)
+    $form.Controls.Add($txtP)
+    $y += 35
+
+    # Separator
+    $sep2 = New-Object System.Windows.Forms.Label
+    $sep2.BorderStyle = "Fixed3D"
+    $sep2.Location = New-Object System.Drawing.Point(15, $y)
+    $sep2.Size = New-Object System.Drawing.Size(430, 2)
+    $form.Controls.Add($sep2)
+    $y += 15
+
+    # Docs auth checkbox
+    $chk = New-Object System.Windows.Forms.CheckBox
+    $chk.Text = "Protect /docs and /setup with HTTP Basic Auth (recommended)"
+    $chk.Checked = $true
+    $chk.Location = New-Object System.Drawing.Point(15, $y)
+    $chk.AutoSize = $true
+    $form.Controls.Add($chk)
+    $y += 30
+
+    # Username
+    $lblU = New-Object System.Windows.Forms.Label
+    $lblU.Text = "Username:"; $lblU.Location = New-Object System.Drawing.Point(35, $y); $lblU.AutoSize = $true
+    $form.Controls.Add($lblU)
+    $txtU = New-Object System.Windows.Forms.TextBox
+    $txtU.Text = "admin"; $txtU.Location = New-Object System.Drawing.Point(140, ($y - 3)); $txtU.Size = New-Object System.Drawing.Size(200, 23)
+    $form.Controls.Add($txtU)
+    $y += 30
+
+    # Password
+    $lblPw = New-Object System.Windows.Forms.Label
+    $lblPw.Text = "Password:"; $lblPw.Location = New-Object System.Drawing.Point(35, $y); $lblPw.AutoSize = $true
+    $form.Controls.Add($lblPw)
+    $txtPw = New-Object System.Windows.Forms.TextBox
+    $txtPw.UseSystemPasswordChar = $true; $txtPw.Location = New-Object System.Drawing.Point(140, ($y - 3)); $txtPw.Size = New-Object System.Drawing.Size(200, 23)
+    $form.Controls.Add($txtPw)
+    $y += 30
+
+    # Confirm password
+    $lblC = New-Object System.Windows.Forms.Label
+    $lblC.Text = "Confirm:"; $lblC.Location = New-Object System.Drawing.Point(35, $y); $lblC.AutoSize = $true
+    $form.Controls.Add($lblC)
+    $txtC = New-Object System.Windows.Forms.TextBox
+    $txtC.UseSystemPasswordChar = $true; $txtC.Location = New-Object System.Drawing.Point(140, ($y - 3)); $txtC.Size = New-Object System.Drawing.Size(200, 23)
+    $form.Controls.Add($txtC)
+    $y += 40
+
+    # Toggle auth fields
+    $authControls = @($lblU, $txtU, $lblPw, $txtPw, $lblC, $txtC)
+    $chk.Add_CheckedChanged({ foreach ($c in $authControls) { $c.Enabled = $chk.Checked } })
+
+    # Buttons
+    $btnInstall = New-Object System.Windows.Forms.Button
+    $btnInstall.Text = "Install"; $btnInstall.Size = New-Object System.Drawing.Size(90, 30)
+    $btnInstall.Location = New-Object System.Drawing.Point(260, $y)
+    $btnInstall.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $form.Controls.Add($btnInstall)
+    $form.AcceptButton = $btnInstall
+
+    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel.Text = "Cancel"; $btnCancel.Size = New-Object System.Drawing.Size(90, 30)
+    $btnCancel.Location = New-Object System.Drawing.Point(355, $y)
+    $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $form.Controls.Add($btnCancel)
+    $form.CancelButton = $btnCancel
+
+    $btnInstall.Add_Click({
+        if ($chk.Checked) {
+            if ([string]::IsNullOrWhiteSpace($txtPw.Text)) {
+                [System.Windows.Forms.MessageBox]::Show("Password cannot be empty.", "Validation", "OK", "Warning") | Out-Null
+                return
+            }
+            if ($txtPw.Text -ne $txtC.Text) {
+                [System.Windows.Forms.MessageBox]::Show("Passwords do not match.", "Validation", "OK", "Warning") | Out-Null
+                return
+            }
+        }
+    })
+
+    $result = $form.ShowDialog()
+    if ($result -ne [System.Windows.Forms.DialogResult]::OK) {
+        Write-Host "Installation cancelled." -ForegroundColor Yellow; exit 0
+    }
+
+    return @{
+        Version  = $txtV.Text
+        Port     = [int]$txtP.Text
+        DocsAuth = $chk.Checked
+        Username = $txtU.Text
+        Password = $txtPw.Text
+    }
+}
+
+# ============================================================
+# Standalone UI helpers (for Docker-start confirmation, etc.)
+# ============================================================
+
+function UI-Banner {
+    param([string]$Title, [string]$Subtitle)
+    $msg = $Title
+    if ($Subtitle) { $msg += "`n`n$Subtitle" }
+    [System.Windows.Forms.MessageBox]::Show($msg, "Cambium Fiber API",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+}
+
+function UI-Confirm {
+    param([string]$Prompt, [bool]$DefaultYes = $false)
+    $result = [System.Windows.Forms.MessageBox]::Show($Prompt, "Cambium Fiber API",
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Question)
+    return ($result -eq [System.Windows.Forms.DialogResult]::Yes)
+}
+
+function UI-TextPrompt {
+    param([string]$Prompt, [string]$Default = "")
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = "Cambium Fiber API"; $form.Size = New-Object System.Drawing.Size(400, 170)
+    $form.StartPosition = "CenterScreen"; $form.FormBorderStyle = "FixedDialog"
+    $form.MaximizeBox = $false; $form.MinimizeBox = $false
+    $lbl = New-Object System.Windows.Forms.Label
+    $lbl.Text = $Prompt; $lbl.Location = New-Object System.Drawing.Point(15, 15); $lbl.Size = New-Object System.Drawing.Size(350, 20)
+    $form.Controls.Add($lbl)
+    $txt = New-Object System.Windows.Forms.TextBox
+    $txt.Text = $Default; $txt.Location = New-Object System.Drawing.Point(15, 45); $txt.Size = New-Object System.Drawing.Size(350, 23)
+    $form.Controls.Add($txt)
+    $ok = New-Object System.Windows.Forms.Button
+    $ok.Text = "OK"; $ok.DialogResult = [System.Windows.Forms.DialogResult]::OK; $ok.Location = New-Object System.Drawing.Point(210, 90)
+    $form.Controls.Add($ok); $form.AcceptButton = $ok
+    $cn = New-Object System.Windows.Forms.Button
+    $cn.Text = "Cancel"; $cn.DialogResult = [System.Windows.Forms.DialogResult]::Cancel; $cn.Location = New-Object System.Drawing.Point(295, 90)
+    $form.Controls.Add($cn); $form.CancelButton = $cn
+    if ($form.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK -and $txt.Text) { return $txt.Text }
+    return $Default
+}
+
+function UI-PasswordPrompt {
+    param([string]$Prompt)
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = "Cambium Fiber API"; $form.Size = New-Object System.Drawing.Size(400, 170)
+    $form.StartPosition = "CenterScreen"; $form.FormBorderStyle = "FixedDialog"
+    $form.MaximizeBox = $false; $form.MinimizeBox = $false
+    $lbl = New-Object System.Windows.Forms.Label
+    $lbl.Text = $Prompt; $lbl.Location = New-Object System.Drawing.Point(15, 15); $lbl.Size = New-Object System.Drawing.Size(350, 20)
+    $form.Controls.Add($lbl)
+    $txt = New-Object System.Windows.Forms.TextBox
+    $txt.UseSystemPasswordChar = $true; $txt.Location = New-Object System.Drawing.Point(15, 45); $txt.Size = New-Object System.Drawing.Size(350, 23)
+    $form.Controls.Add($txt)
+    $ok = New-Object System.Windows.Forms.Button
+    $ok.Text = "OK"; $ok.DialogResult = [System.Windows.Forms.DialogResult]::OK; $ok.Location = New-Object System.Drawing.Point(210, 90)
+    $form.Controls.Add($ok); $form.AcceptButton = $ok
+    $cn = New-Object System.Windows.Forms.Button
+    $cn.Text = "Cancel"; $cn.DialogResult = [System.Windows.Forms.DialogResult]::Cancel; $cn.Location = New-Object System.Drawing.Point(295, 90)
+    $form.Controls.Add($cn); $form.CancelButton = $cn
+    if ($form.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { return $txt.Text }
+    return ""
+}
+
+# ============================================================
+# Console logging
+# ============================================================
+
+function Write-ColorOutput {
+    param([Parameter(Mandatory=$true)][string]$Message, [string]$Level = "INFO")
+    $color = switch($Level) { "ERROR" { "Red" } "WARN" { "Yellow" } "INFO" { "Green" } default { "White" } }
     Write-Host "[$Level] $Message" -ForegroundColor $color
 }
 
-function Test-Docker {
-    Write-ColorOutput "Checking Docker installation..." -Level INFO
+# ============================================================
+# Docker checks
+# ============================================================
 
+function Test-Docker {
+    Write-ColorOutput "Checking Docker..." -Level INFO
     try {
         $dockerVersion = docker --version
-        if ($LASTEXITCODE -ne 0) {
-            throw "Docker command failed"
-        }
-    }
-    catch {
+        if ($LASTEXITCODE -ne 0) { throw "fail" }
+    } catch {
         Write-ColorOutput "Docker is not installed" -Level ERROR
-        Write-ColorOutput "Please install Docker Desktop from: https://www.docker.com/products/docker-desktop" -Level INFO
+        [System.Windows.Forms.MessageBox]::Show(
+            "Docker is not installed.`n`nPlease install Docker Desktop from:`nhttps://www.docker.com/products/docker-desktop",
+            "Cambium Fiber API", "OK", "Error") | Out-Null
         exit 1
     }
 
     try {
-        docker info | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            throw "Docker daemon not running"
+        docker info 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "not running" }
+    } catch {
+        $dockerDesktop = "${env:ProgramFiles}\Docker\Docker\Docker Desktop.exe"
+        if (Test-Path $dockerDesktop) {
+            Write-ColorOutput "Docker Desktop is installed but not running" -Level WARN
+            if (-not (UI-Confirm -Prompt "Docker Desktop is not running. Start it now?" -DefaultYes $true)) {
+                exit 1
+            }
+            Write-ColorOutput "Starting Docker Desktop..." -Level INFO
+            Start-Process $dockerDesktop
+            $maxWait = 60; $waited = 0
+            while ($waited -lt $maxWait) {
+                Start-Sleep -Seconds 3; $waited += 3; Write-Host "." -NoNewline
+                docker info 2>&1 | Out-Null
+                if ($LASTEXITCODE -eq 0) { Write-Host ""; break }
+            }
+            if ($waited -ge $maxWait) {
+                Write-Host ""; Write-ColorOutput "Docker Desktop did not start within ${maxWait}s" -Level ERROR; exit 1
+            }
+        } else {
+            Write-ColorOutput "Docker daemon is not running" -Level ERROR; exit 1
         }
     }
-    catch {
-        Write-ColorOutput "Docker daemon is not running" -Level ERROR
-        Write-ColorOutput "Please start Docker Desktop and try again" -Level INFO
-        exit 1
-    }
-
     Write-ColorOutput "Docker is ready ($dockerVersion)" -Level INFO
+
+    try { docker compose version | Out-Null; if ($LASTEXITCODE -ne 0) { throw "fail" } }
+    catch { Write-ColorOutput "Docker Compose not available" -Level ERROR; exit 1 }
 }
 
-function Test-DockerCompose {
-    Write-ColorOutput "Checking Docker Compose..." -Level INFO
+# ============================================================
+# File generation
+# ============================================================
 
-    try {
-        $composeVersion = docker compose version
-        if ($LASTEXITCODE -ne 0) {
-            throw "Docker Compose command failed"
-        }
-    }
-    catch {
-        Write-ColorOutput "Docker Compose is not available" -Level ERROR
-        Write-ColorOutput "Please install Docker Compose v2 or Docker Desktop" -Level INFO
-        exit 1
-    }
-
-    Write-ColorOutput "Docker Compose is ready ($composeVersion)" -Level INFO
-}
-
-function New-InstallDirectory {
-    Write-ColorOutput "Creating installation directory: $InstallDir" -Level INFO
-
-    if (-not (Test-Path $InstallDir)) {
-        try {
-            New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-        }
-        catch {
-            Write-ColorOutput "Failed to create directory. Please run PowerShell as Administrator." -Level ERROR
-            exit 1
-        }
-    Write-ColorOutput "Creating docker-compose.yml..." -Level INFO
-
+function New-ComposeFile {
     $composeContent = @'
-version: '3.8'
-
 services:
   cambium-fiber-api:
     image: ${CAMBIUM_API_IMAGE:-cambium-fiber-api:latest}
     container_name: cambium-fiber-api
-        ports:
-            - "${CAMBIUM_API_PORT:-8192}:8192"
+    ports:
+      - "${CAMBIUM_API_PORT:-8192}:8192"
     volumes:
       - ${CAMBIUM_CONFIG_PATH:-./connections.json}:/app/connections.json${CAMBIUM_CONFIG_MODE:-}
       - api-data:/app/data
@@ -124,8 +350,8 @@ services:
       - SSL_CERT_PATH=${SSL_CERT_PATH:-}
       - SSL_KEY_PATH=${SSL_KEY_PATH:-}
     restart: unless-stopped
-        healthcheck:
-            test: ["CMD", "wget", "--spider", "--quiet", "http://localhost:8192/health"]
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://localhost:8192/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -139,525 +365,238 @@ volumes:
   api-backups:
     driver: local
 '@
-
     Set-Content -Path $ComposeFile -Value $composeContent -Encoding UTF8
-    Write-ColorOutput "docker-compose.yml created" -Level INFO
 }
 
 function New-EnvFile {
-    Write-ColorOutput "Creating environment configuration..." -Level INFO
+    param([hashtable]$Config)
+    if ($env:VERSION) { $Config.Version = $env:VERSION }
+    if ($env:API_PORT) { $Config.Port = [int]$env:API_PORT }
 
-    # Check for local tarball to suggest version
-    $suggestedVersion = "latest"
-    $tarball = Get-ChildItem -Path . -Filter "cambium-fiber-api-*.tar*" -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($tarball) {
-        # Extract version from tarball filename (e.g., cambium-fiber-api-1.0.0-beta.1.tar.gz -> 1.0.0-beta.1)
-        if ($tarball.Name -match "cambium-fiber-api-(.+)\.tar") {
-            $detectedVersion = $Matches[1]
-            $suggestedVersion = $detectedVersion
-            Write-ColorOutput "Found local tarball with version: $detectedVersion" -Level INFO
-        }
-    }
-
-    # Check for environment variables, prompt if not set (non-interactive mode)
-    if ($env:VERSION) {
-        $Version = $env:VERSION
-        Write-ColorOutput "Using version from VERSION: $Version" -Level INFO
-    }
-    elseif ($Version -eq "latest") {
-        $userVersion = Read-Host "Enter version to install [$suggestedVersion]"
-        if ($userVersion) {
-            $Version = $userVersion
-        }
-        else {
-            $Version = $suggestedVersion
-        }
-    }
-
-    if ($env:API_PORT) {
-        $Port = [int]$env:API_PORT
-        Write-ColorOutput "Using port from API_PORT: $Port" -Level INFO
-    }
-    elseif ($Port -eq 8192) {
-        $userPort = Read-Host "Enter port to expose API [8192]"
-        if ($userPort) {
-            $Port = [int]$userPort
-        }
-    }
+    $enableSetup = $(if ($env:ENABLE_SETUP_WIZARD) { $env:ENABLE_SETUP_WIZARD } else { 'true' })
+    $oauthId = $(if ($env:OAUTH_CLIENT_ID) { $env:OAUTH_CLIENT_ID } else { '' })
+    $oauthSecret = $(if ($env:OAUTH_CLIENT_SECRET) { $env:OAUTH_CLIENT_SECRET } else { '' })
+    $sslCert = $(if ($env:SSL_CERT_PATH) { $env:SSL_CERT_PATH } else { '' })
+    $sslKey = $(if ($env:SSL_KEY_PATH) { $env:SSL_KEY_PATH } else { '' })
 
     $envContent = @"
 # Cambium Fiber API Configuration
-CAMBIUM_API_IMAGE=cambium-fiber-api:$Version
-CAMBIUM_API_PORT=$Port
-ENABLE_SETUP_WIZARD=$(if ($env:ENABLE_SETUP_WIZARD) { $env:ENABLE_SETUP_WIZARD } else { 'true' })
-OAUTH_CLIENT_ID=$(if ($env:OAUTH_CLIENT_ID) { $env:OAUTH_CLIENT_ID } else { '' })
-OAUTH_CLIENT_SECRET=$(if ($env:OAUTH_CLIENT_SECRET) { $env:OAUTH_CLIENT_SECRET } else { '' })
-SSL_CERT_PATH=$(if ($env:SSL_CERT_PATH) { $env:SSL_CERT_PATH } else { '' })
-SSL_KEY_PATH=$(if ($env:SSL_KEY_PATH) { $env:SSL_KEY_PATH } else { '' })
+CAMBIUM_API_IMAGE=cambium-fiber-api:$($Config.Version)
+CAMBIUM_API_PORT=$($Config.Port)
+ENABLE_SETUP_WIZARD=$enableSetup
+OAUTH_CLIENT_ID=$oauthId
+OAUTH_CLIENT_SECRET=$oauthSecret
+SSL_CERT_PATH=$sslCert
+SSL_KEY_PATH=$sslKey
 "@
-
     Set-Content -Path $EnvFile -Value $envContent -Encoding UTF8
-    Write-ColorOutput "Environment file created: $EnvFile" -Level INFO
 }
 
-function Import-DockerImage {
-    Write-ColorOutput "Checking for Docker image..." -Level INFO
+function New-ConnectionsFile {
+    param([hashtable]$Config)
+    $connectionsFile = "$InstallDir\connections.json"
+    if (Test-Path $connectionsFile -PathType Container) {
+        Remove-Item -Path $connectionsFile -Recurse -Force
+    }
 
-    # Read env file to get desired IMAGE variable
+    if ($Config.DocsAuth) {
+        $escapedPass = $Config.Password -replace "'", "''"
+        $dockerCmd = "pip install -q bcrypt; python -c `"import bcrypt; print(bcrypt.hashpw('$escapedPass'.encode('utf-8'), bcrypt.gensalt()).decode('utf-8'))`""
+        try {
+            $docsHash = docker run --rm python:3.11-slim bash -c $dockerCmd 2>$null
+            if ($LASTEXITCODE -ne 0 -or -not $docsHash) { throw "hash failed" }
+        } catch {
+            Write-ColorOutput "Failed to generate password hash" -Level ERROR; exit 1
+        }
+        $script:docsAuthEnabled = $true
+        $json = @'
+{
+  "docs_auth": {
+    "username": "__USERNAME__",
+    "password_hash": "__HASH__"
+  }
+}
+'@
+        $json = $json -replace '__USERNAME__', $Config.Username -replace '__HASH__', $docsHash.Trim()
+        Set-Content -Path $connectionsFile -Value $json -Encoding UTF8
+    } else {
+        $script:docsAuthEnabled = $false
+        Set-Content -Path $connectionsFile -Value "{}" -Encoding UTF8
+    }
+}
+
+# ============================================================
+# Docker image loading
+# ============================================================
+
+function Import-DockerImage {
+    Write-ColorOutput "Loading Docker image..." -Level INFO
     $envContent = Get-Content $EnvFile
     $imageLine = $envContent | Where-Object { $_ -match "^CAMBIUM_API_IMAGE=" }
     $desiredImage = $imageLine -replace "^CAMBIUM_API_IMAGE=", ""
 
-    # Check if tarball exists in current directory
     $tarball = Get-ChildItem -Path . -Filter "cambium-fiber-api-*.tar*" | Select-Object -First 1
-
     if ($tarball) {
-        Write-ColorOutput "Found local tarball: $($tarball.Name)" -Level INFO
-        Write-ColorOutput "Loading Docker image from tarball..." -Level INFO
-
-        # Extract version from tarball filename
         $tarballVersion = ""
-        if ($tarball.Name -match "cambium-fiber-api-(.+)\.tar") {
-            $tarballVersion = $Matches[1]
-        }
+        if ($tarball.Name -match "cambium-fiber-api-(.+)\.tar") { $tarballVersion = $Matches[1] }
 
         if ($tarball.Extension -eq ".gz") {
-            # Decompress and load
             $tempTar = "$env:TEMP\cambium-temp.tar"
-
-            # Use 7-Zip if available, otherwise use .NET
-            if (Get-Command 7z -ErrorAction SilentlyContinue) {
-                7z x $tarball.FullName -o"$env:TEMP" -y | Out-Null
+            if (Get-Command tar -ErrorAction SilentlyContinue) {
+                tar -xzf $tarball.FullName -C $env:TEMP
+                $innerTar = Get-ChildItem -Path $env:TEMP -Filter "*.tar" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Name -match "cambium" } | Select-Object -First 1
+                if ($innerTar) { docker load -i $innerTar.FullName; Remove-Item $innerTar.FullName -ErrorAction SilentlyContinue }
+                else { docker load -i $tarball.FullName }
+            } else {
+                $gzStream = [System.IO.File]::OpenRead($tarball.FullName)
+                $decompress = New-Object System.IO.Compression.GZipStream($gzStream, [System.IO.Compression.CompressionMode]::Decompress)
+                $outStream = [System.IO.File]::Create($tempTar)
+                $decompress.CopyTo($outStream)
+                $outStream.Close(); $decompress.Close(); $gzStream.Close()
                 docker load -i $tempTar
+                Remove-Item $tempTar -ErrorAction SilentlyContinue
             }
-            else {
-                Write-ColorOutput "Please decompress $($tarball.Name) manually and run: docker load -i <tarfile>" -Level WARN
-                return
-            }
-
-            Remove-Item $tempTar -ErrorAction SilentlyContinue
-        }
-        else {
+        } else {
             docker load -i $tarball.FullName
         }
-
-        if ($LASTEXITCODE -eq 0) {
-            Write-ColorOutput "Image loaded successfully" -Level INFO
-
-            # Re-tag the loaded image to match the requested version if different
-            if ($tarballVersion -and $desiredImage -ne "cambium-fiber-api:$tarballVersion") {
-                Write-ColorOutput "Tagging image as: $desiredImage" -Level INFO
-                docker tag "cambium-fiber-api:$tarballVersion" $desiredImage
-            }
+        if ($LASTEXITCODE -ne 0) { Write-ColorOutput "Failed to load image" -Level ERROR; exit 1 }
+        if ($tarballVersion -and $desiredImage -ne "cambium-fiber-api:$tarballVersion") {
+            docker tag "cambium-fiber-api:$tarballVersion" $desiredImage
         }
-        else {
-            Write-ColorOutput "Failed to load image from tarball" -Level ERROR
-            exit 1
-        }
-    }
-    else {
-        Write-ColorOutput "No local tarball found - pulling from registry" -Level WARN
-        Write-ColorOutput "Pulling Docker image..." -Level INFO
-
+    } else {
+        Write-ColorOutput "No local tarball -- pulling from registry..." -Level WARN
         docker pull $desiredImage
-
-        if ($LASTEXITCODE -eq 0) {
-            Write-ColorOutput "Image pulled successfully" -Level INFO
-        }
-        else {
-            Write-ColorOutput "Failed to pull image from registry" -Level ERROR
-            Write-ColorOutput "Please download the tarball manually or check registry access" -Level INFO
-            exit 1
-        }
+        if ($LASTEXITCODE -ne 0) { Write-ColorOutput "Failed to pull image" -Level ERROR; exit 1 }
     }
+    Write-ColorOutput "Image ready" -Level INFO
 }
 
-function Request-DocsAuth {
-    Write-ColorOutput "Documentation Authentication Setup" -Level INFO
-    Write-Host ""
-    Write-ColorOutput "SECURITY: The /docs and /setup endpoints WILL be protected with HTTP Basic Authentication." -Level WARN
-    Write-Host ""
-
-    if ($env:DOCS_AUTH_ENABLED) {
-        if ($env:DOCS_AUTH_ENABLED -eq "false") {
-            Write-ColorOutput "DOCS_AUTH_ENABLED=false detected - documentation will be publicly accessible" -Level WARN
-            $protectDocs = "N"
-        }
-        else {
-            $protectDocs = "Y"
-            Write-ColorOutput "Using DOCS_AUTH_ENABLED from environment: $protectDocs" -Level INFO
-        }
-    }
-    else {
-        Write-Host "Press ENTER to protect endpoints (recommended)"
-        $disableProtection = Read-Host "Or type exactly 'I understand the risk' to disable protection"
-        if ($disableProtection -eq "I understand the risk") {
-            $protectDocs = "N"
-        }
-        else {
-            $protectDocs = "Y"
-        }
-    }
-
-    if ($protectDocs -match "^[Yy]") {
-        if ($env:DOCS_USERNAME) {
-            $docsUser = $env:DOCS_USERNAME
-            Write-ColorOutput "Using DOCS_USERNAME from environment: $docsUser" -Level INFO
-        }
-        else {
-            $docsUser = Read-Host "Enter username for /docs and /setup [admin]"
-            if (-not $docsUser) {
-                $docsUser = "admin"
-            }
-        }
-
-        if ($env:DOCS_PASSWORD) {
-            $docsPass = $env:DOCS_PASSWORD
-            Write-ColorOutput "Using DOCS_PASSWORD from environment" -Level INFO
-        }
-        else {
-            $securePass = Read-Host "Enter password" -AsSecureString
-            $securePassConfirm = Read-Host "Confirm password" -AsSecureString
-
-            $docsPass = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePass))
-            $docsPassConfirm = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassConfirm))
-
-            if ($docsPass -ne $docsPassConfirm) {
-                Write-ColorOutput "Passwords do not match!" -Level ERROR
-                exit 1
-            }
-
-            if (-not $docsPass) {
-                Write-ColorOutput "Password cannot be empty!" -Level ERROR
-                exit 1
-            }
-        }
-
-        Write-ColorOutput "Generating password hash..." -Level INFO
-
-        $escapedPass = $docsPass -replace "'", "''"
-        $dockerCmd = "pip install -q bcrypt && python -c `"import bcrypt; print(bcrypt.hashpw('$escapedPass'.encode('utf-8'), bcrypt.gensalt()).decode('utf-8'))`""
-
-        try {
-            $docsHash = docker run --rm python:3.11-slim bash -c $dockerCmd 2>$null
-            if ($LASTEXITCODE -ne 0 -or -not $docsHash) {
-                throw "Docker command failed"
-            }
-        }
-        catch {
-            Write-ColorOutput "Failed to generate password hash" -Level ERROR
-            exit 1
-        }
-
-        $script:docsAuthEnabled = $true
-        $script:docsAuthUsername = $docsUser
-        $script:docsAuthHash = $docsHash.Trim()
-
-        Write-ColorOutput "✓ Documentation authentication configured" -Level INFO
-    }
-    else {
-        $script:docsAuthEnabled = $false
-        Write-ColorOutput "Documentation endpoints will be publicly accessible" -Level WARN
-    }
-    Write-Host ""
-}
-
-function New-ConnectionsFile {
-    Write-ColorOutput "Creating connections configuration file..." -Level INFO
-
-    $connectionsFile = "$InstallDir\connections.json"
-
-    # Remove if it exists as a directory (from previous failed install)
-    if (Test-Path $connectionsFile -PathType Container) {
-        Write-ColorOutput "Removing stale connections.json directory from previous install" -Level WARN
-        Remove-Item -Path $connectionsFile -Recurse -Force
-    }
-
-    if ($script:docsAuthEnabled) {
-        $connectionsContent = @"
-{
-  "docs_auth": {
-    "username": "$($script:docsAuthUsername)",
-    "password_hash": "$($script:docsAuthHash)"
-  }
-}
-"@
-        Set-Content -Path $connectionsFile -Value $connectionsContent -Encoding UTF8
-        Write-ColorOutput "connections.json created with documentation authentication" -Level INFO
-    }
-    else {
-        Set-Content -Path $connectionsFile -Value "{}" -Encoding UTF8
-        Write-ColorOutput "Empty connections.json created (will be configured via setup wizard)" -Level INFO
-    }
-}
+# ============================================================
+# Container startup & endpoint validation
+# ============================================================
 
 function Test-Endpoint {
-    param(
-        [string]$Url,
-        [string]$Name,
-        [int]$MaxRetries = 3,
-        [int[]]$AcceptableCodes = @(200)
-    )
-
-    $retryCount = 0
-    while ($retryCount -lt $MaxRetries) {
+    param([string]$Url, [string]$Name, [int]$MaxRetries = 3, [int[]]$AcceptableCodes = @(200))
+    for ($i = 0; $i -lt $MaxRetries; $i++) {
         try {
-            $response = Invoke-WebRequest -Uri $Url -Method Get -TimeoutSec 2 -ErrorAction Stop
-            if ($AcceptableCodes -contains $response.StatusCode) {
-                return $true
-            }
-        }
-        catch [System.Net.WebException] {
-            $statusCode = [int]$_.Exception.Response.StatusCode
-            if ($AcceptableCodes -contains $statusCode) {
-                return $true
-            }
-        }
-        catch {
-            # Continue to retry
-        }
-        $retryCount++
-        if ($retryCount -lt $MaxRetries) {
-            Start-Sleep -Seconds 1
-        }
+            $r = Invoke-WebRequest -Uri $Url -Method Get -TimeoutSec 2 -ErrorAction Stop
+            if ($AcceptableCodes -contains $r.StatusCode) { return $true }
+        } catch [System.Net.WebException] {
+            $code = [int]$_.Exception.Response.StatusCode
+            if ($AcceptableCodes -contains $code) { return $true }
+        } catch { }
+        if ($i -lt ($MaxRetries - 1)) { Start-Sleep -Seconds 1 }
     }
     return $false
 }
 
 function Get-ContainerLogs {
-    Write-ColorOutput "Checking container logs for errors..." -Level INFO
-    Write-Host ""
-    Write-Host "==================== Last 30 Log Lines ===================="
+    Write-ColorOutput "Last 30 log lines:" -Level INFO
     docker logs --tail 30 cambium-fiber-api 2>&1 | ForEach-Object { Write-Host $_ }
-    Write-Host "==========================================================="
-    Write-Host ""
 }
 
 function Write-Troubleshooting {
     param([int]$ApiPort)
-
-    Write-Host ""
-    Write-ColorOutput "================================================================" -Level ERROR
-    Write-ColorOutput "  Installation Incomplete - Endpoints Not Ready" -Level ERROR
-    Write-ColorOutput "================================================================" -Level ERROR
-    Write-Host ""
-    Write-ColorOutput "Troubleshooting Steps:" -Level INFO
-    Write-Host ""
-    Write-ColorOutput "1. Check container status:" -Level INFO
-    Write-ColorOutput "   docker ps -a | Select-String cambium-fiber-api" -Level INFO
-    Write-Host ""
-    Write-ColorOutput "2. View full logs:" -Level INFO
-    Write-ColorOutput "   docker logs cambium-fiber-api" -Level INFO
-    Write-Host ""
-    Write-ColorOutput "3. Check for common issues:" -Level INFO
-    Write-ColorOutput "   - Port $ApiPort already in use: netstat -ano | Select-String $ApiPort" -Level INFO
-    Write-ColorOutput "   - Permissions on connections.json: Get-ChildItem $InstallDir\connections.json" -Level INFO
-    Write-ColorOutput "   - Docker resources: docker system df" -Level INFO
-    Write-Host ""
-    Write-ColorOutput "4. Try restarting the container:" -Level INFO
-    Write-ColorOutput "   cd $InstallDir" -Level INFO
-    Write-ColorOutput "   docker compose down" -Level INFO
-    Write-ColorOutput "   docker compose up -d" -Level INFO
-    Write-Host ""
-    Write-ColorOutput "5. Check Docker networking:" -Level INFO
-    Write-ColorOutput "   curl http://localhost:$ApiPort/health -Verbose" -Level INFO
-    Write-Host ""
-    Write-ColorOutput "Common Issues:" -Level INFO
-    Write-ColorOutput "  - If /health works but /docs fails: Check for Python import errors in logs" -Level INFO
-    Write-ColorOutput "  - If connection refused: Container may not be running or port not exposed" -Level INFO
-    Write-ColorOutput "  - If 500 errors: Check application logs for exceptions" -Level INFO
-    Write-Host ""
-    Write-ColorOutput "================================================================" -Level INFO
+    Write-ColorOutput "Troubleshooting:" -Level ERROR
+    Write-ColorOutput "  docker ps -a | Select-String cambium-fiber-api" -Level INFO
+    Write-ColorOutput "  docker logs cambium-fiber-api" -Level INFO
+    Write-ColorOutput "  netstat -ano | Select-String $ApiPort" -Level INFO
+    Write-ColorOutput "  cd $InstallDir; docker compose down; docker compose up -d" -Level INFO
 }
 
 function Start-ApiContainer {
-    Write-ColorOutput "Starting Cambium Fiber API..." -Level INFO
-
+    param([int]$ApiPort)
+    Write-ColorOutput "Starting container..." -Level INFO
     Push-Location $InstallDir
     docker compose --env-file $EnvFile up -d
     Pop-Location
-
-    # Read port from env file
-    $envContent = Get-Content $EnvFile
-    $portLine = $envContent | Where-Object { $_ -match "^CAMBIUM_API_PORT=" }
-    $apiPort = $portLine -replace "^CAMBIUM_API_PORT=", ""
-
-    Write-ColorOutput "Waiting for container to start..." -Level INFO
     Start-Sleep -Seconds 5
 
-    # Check if container is actually running
-    $containerRunning = docker ps | Select-String "cambium-fiber-api"
-    if (-not $containerRunning) {
+    if (-not (docker ps | Select-String "cambium-fiber-api")) {
         Write-ColorOutput "Container failed to start!" -Level ERROR
-        Get-ContainerLogs
-        Write-Troubleshooting -ApiPort $apiPort
-        exit 1
+        Get-ContainerLogs; Write-Troubleshooting -ApiPort $ApiPort; exit 1
     }
 
-    Write-ColorOutput "Validating endpoints..." -Level INFO
+    $script:healthOk = $false; $script:docsOk = $false; $script:setupOk = $false
 
-    # Track which endpoints work
-    $script:healthOk = $false
-    $script:docsOk = $false
-    $script:setupOk = $false
-
-    # Wait for health endpoint with retry
-    $maxRetries = 30
-    $retryCount = 0
-
-    while ($retryCount -lt $maxRetries) {
-        if (Test-Endpoint -Url "http://localhost:$apiPort/health" -Name "health" -MaxRetries 1) {
-            $script:healthOk = $true
-            break
+    Write-ColorOutput "Validating /health endpoint..." -Level INFO
+    for ($i = 0; $i -lt 30; $i++) {
+        if (Test-Endpoint -Url "http://localhost:$ApiPort/health" -Name "health" -MaxRetries 1) {
+            $script:healthOk = $true; break
         }
-        Write-Host "." -NoNewline
-        Start-Sleep -Seconds 2
-        $retryCount++
+        Write-Host "." -NoNewline; Start-Sleep -Seconds 2
     }
     Write-Host ""
-
     if (-not $script:healthOk) {
-        Write-ColorOutput "✗ Health endpoint failed to respond" -Level ERROR
-        Get-ContainerLogs
-        Write-Troubleshooting -ApiPort $apiPort
-        exit 1
+        Write-ColorOutput "Health endpoint failed" -Level ERROR
+        Get-ContainerLogs; Write-Troubleshooting -ApiPort $ApiPort; exit 1
     }
 
-    # Now validate the other critical endpoints
-    # Session-based auth redirects unauthenticated browsers with HTTP 307
-    $expectedDocsCodes = @(200)
-    if ($script:docsAuthEnabled) {
-        $expectedDocsCodes = @(200, 303, 307, 401)
-    }
+    $codes = @(200)
+    if ($script:docsAuthEnabled) { $codes = @(200, 303, 307, 401) }
 
-    if (Test-Endpoint -Url "http://localhost:$apiPort/docs" -Name "docs" -MaxRetries 3 -AcceptableCodes $expectedDocsCodes) {
-        $script:docsOk = $true
-    }
-    else {
-        Write-ColorOutput "✗ /docs endpoint is not responding or returning errors" -Level ERROR
-        $script:docsOk = $false
-    }
+    if (Test-Endpoint -Url "http://localhost:$ApiPort/docs" -Name "docs" -MaxRetries 3 -AcceptableCodes $codes) { $script:docsOk = $true }
+    if (Test-Endpoint -Url "http://localhost:$ApiPort/setup" -Name "setup" -MaxRetries 3 -AcceptableCodes $codes) { $script:setupOk = $true }
 
-    if (Test-Endpoint -Url "http://localhost:$apiPort/setup" -Name "setup" -MaxRetries 3 -AcceptableCodes $expectedDocsCodes) {
-        $script:setupOk = $true
-    }
-    else {
-        Write-ColorOutput "✗ /setup endpoint is not responding or returning errors" -Level ERROR
-        $script:setupOk = $false
-    }
-
-    # If any critical endpoint failed, show diagnostics and fail
     if (-not $script:docsOk -or -not $script:setupOk) {
-        Write-Host ""
-        Write-ColorOutput "Critical endpoints are not responding correctly!" -Level ERROR
-        Write-ColorOutput "Getting diagnostic information..." -Level INFO
-        Get-ContainerLogs
-
-        # Test each endpoint manually to get detailed error info
-        Write-Host ""
-        Write-ColorOutput "Detailed endpoint testing:" -Level INFO
-        foreach ($endpoint in @("health", "docs", "setup")) {
-            Write-Host ""
-            Write-ColorOutput "Testing /$endpoint:" -Level INFO
-            try {
-                $response = Invoke-WebRequest -Uri "http://localhost:$apiPort/$endpoint" -Method Get -TimeoutSec 5 -ErrorAction Stop
-                Write-Host "Status: $($response.StatusCode)"
-            }
-            catch {
-                Write-Host "Error: $($_.Exception.Message)"
-            }
-        }
-
-        Write-Troubleshooting -ApiPort $apiPort
-        exit 1
+        Write-ColorOutput "Critical endpoints not responding" -Level ERROR
+        Get-ContainerLogs; Write-Troubleshooting -ApiPort $ApiPort; exit 1
     }
-
-    Write-ColorOutput "✓ Ready" -Level INFO
+    Write-ColorOutput "All endpoints verified" -Level INFO
 }
 
-function Open-SetupWizard {
-    # Check if browser should be opened (skip for headless/CI environments)
-    # If OPEN_BROWSER is set (uncommented), skip browser open
-    if ($env:OPEN_BROWSER) {
-        return
-    }
-
-    # Read port from env file
-    $envContent = Get-Content $EnvFile
-    $portLine = $envContent | Where-Object { $_ -match "^CAMBIUM_API_PORT=" }
-    $apiPort = $portLine -replace "^CAMBIUM_API_PORT=", ""
-
-    $setupUrl = "http://localhost:$apiPort/setup"
-
-    try {
-        Start-Process $setupUrl
-    }
-    catch {
-        # Silently fail
-    }
-}
+# ============================================================
+# Success
+# ============================================================
 
 function Write-Success {
-    # Read port from env file
-    $envContent = Get-Content $EnvFile
-    $portLine = $envContent | Where-Object { $_ -match "^CAMBIUM_API_PORT=" }
-    $apiPort = $portLine -replace "^CAMBIUM_API_PORT=", ""
+    param([int]$ApiPort)
+    # Verified -- all endpoints passed validation
+    $msg = "Installation Complete!`n`n" +
+        "Setup Wizard:  http://localhost:${ApiPort}/setup`n" +
+        "API Docs:         http://localhost:${ApiPort}/docs`n" +
+        "View Logs:        docker logs -f cambium-fiber-api"
+    [System.Windows.Forms.MessageBox]::Show($msg,
+        "Cambium Fiber API",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+    Write-ColorOutput "Done: http://localhost:$ApiPort/setup" -Level INFO
+}
 
-    # Helper function to create hyperlinks
-    function Write-Hyperlink {
-        param([string]$Url, [string]$Text = $Url)
-        # PowerShell hyperlink format: `e]8;;URL`e\TEXT`e]8;;`e\
-        $esc = [char]27
-        Write-Host "$esc]8;;$Url$esc\" -NoNewline
-        Write-Host $Text -ForegroundColor Blue -NoNewline
-        Write-Host "$esc]8;;$esc\" -NoNewline
+# ============================================================
+# Main
+# ============================================================
+
+function Main {
+    Test-Docker
+    $config = Show-InstallerWizard
+
+    if (-not (Test-Path $InstallDir)) {
+        try { New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null }
+        catch { Write-ColorOutput "Cannot create $InstallDir -- run as Administrator" -Level ERROR; exit 1 }
     }
 
-    Write-Host ""
-    Write-Host "================================================================"
-    Write-Host "  ✓ Installation Complete!" -ForegroundColor Green
-    Write-Host "================================================================"
-    Write-Host ""
-    Write-Host "  " -NoNewline
-    Write-Host "Next Step: " -ForegroundColor Yellow -NoNewline
-    Write-Host "Open " -NoNewline
-    Write-Hyperlink "http://localhost:$apiPort/setup"
-    Write-Host " to configure your OLTs"
-    Write-Host ""
-    Write-Host "  API Documentation: " -ForegroundColor Cyan -NoNewline
-    Write-Hyperlink "http://localhost:$apiPort/docs"
-    Write-Host ""
-    Write-Host "  View Logs: docker logs -f cambium-fiber-api" -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "================================================================"
-    Write-Host ""
-}
-
-# Main installation flow
-function Main {
-    Write-Host ""
-    Write-ColorOutput "Cambium Fiber API - Windows Installer" -Level INFO
-    Write-ColorOutput "====================================" -Level INFO
-    Write-Host ""
-
-    Test-Docker
-    Test-DockerCompose
-    New-InstallDirectory
     New-ComposeFile
-    New-EnvFile
-    Request-DocsAuth
-    New-ConnectionsFile
+    New-EnvFile -Config $config
+    New-ConnectionsFile -Config $config
     Import-DockerImage
-    Start-ApiContainer
-    Open-SetupWizard
-    Write-Success
+    Start-ApiContainer -ApiPort $config.Port
+
+    # Open setup wizard in browser (skip in CI/headless)
+    if ($env:OPEN_BROWSER) {
+        # OPEN_BROWSER set -- skip browser launch
+    } else {
+        try { Start-Process "http://localhost:$($config.Port)/setup" } catch { }
+    }
+    Write-Success -ApiPort $config.Port
 }
 
-# Run main installation
-try {
-    Main
-}
+try { Main }
 catch {
     Write-ColorOutput "Installation failed: $_" -Level ERROR
+    [System.Windows.Forms.MessageBox]::Show("Installation failed:`n`n$_", "Cambium Fiber API",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
     exit 1
 }

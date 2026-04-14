@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ---
 
 
+## [1.0.0-RC5] - 2026-04-13
+
+- PowerShell installer/uninstaller: native Windows Forms GUI (single wizard form, no external modules)
+- Linux installer/uninstaller: whiptail/dialog TUI with plain-text fallback
+- Docker Desktop auto-detection and startup prompt on Windows
+
 ## [1.0.0-RC4] - 2026-03-30
 
 - Official support for Python 3.13
