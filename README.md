@@ -18,7 +18,7 @@ Unified REST API for managing fiber networks across multiple OLTs. Pre-configure
 
 ## Quick Start
 
-**Prerequisites:** [Docker Desktop](https://docker.com/products/docker-desktop) installed
+**Prerequisites:** [Docker](https://docs.docker.com/engine/install/) or [Docker Desktop](https://docker.com/products/docker-desktop) installed (the Linux installer will offer to install Docker Engine automatically if missing)
 
 ### Linux / macOS
 

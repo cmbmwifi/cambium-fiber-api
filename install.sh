@@ -176,18 +176,46 @@ cleanup() {
 }
 trap cleanup EXIT
 
+install_docker_engine() {
+    print_info "Installing Docker Engine via official convenience script (https://get.docker.com)..."
+    if ! curl -fsSL https://get.docker.com | sh; then
+        print_error "Docker Engine installation failed"
+        print_info "Try installing manually: https://docs.docker.com/engine/install/"
+        exit 1
+    fi
+    # Start and enable the Docker service
+    if command -v systemctl &> /dev/null; then
+        systemctl start docker 2>/dev/null || true
+        systemctl enable docker 2>/dev/null || true
+    fi
+    print_info "Docker Engine installed successfully"
+}
+
 check_docker() {
     print_info "Checking Docker installation..."
 
     if ! command -v docker &> /dev/null; then
         print_error "Docker is not installed"
-        print_info "Please install Docker Desktop from: https://www.docker.com/products/docker-desktop"
-        exit 1
+        if [[ "$(uname -s)" == "Linux" ]]; then
+            if ui_yesno "Install Docker" "Docker is required but not installed.\n\nInstall Docker Engine automatically?" true; then
+                install_docker_engine
+            else
+                print_info "Install Docker Engine manually: https://docs.docker.com/engine/install/"
+                exit 1
+            fi
+        else
+            print_info "Please install Docker Desktop from: https://www.docker.com/products/docker-desktop"
+            exit 1
+        fi
     fi
 
     if ! docker info &> /dev/null; then
         print_error "Docker daemon is not running"
-        print_info "Please start Docker Desktop and try again"
+        if command -v systemctl &> /dev/null; then
+            print_info "Try: sudo systemctl start docker"
+        else
+            print_info "Please start the Docker service and try again"
+        fi
         exit 1
     fi
 

@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ---
 
 
+## [1.0.0-RC6] - 2026-04-16
+
+- **Delete ONU**: new `DELETE /api/v2/fiber/onus/{serial}` and `DELETE /api/v2/fiber/olts/{olt_id}/onus/{serial}` endpoints to remove an ONU from the OLT (it will re-onboard automatically with default settings)
+- **List all pre-provisioned configs**: new `GET /api/v2/fiber/onus/pending-configs` endpoint returns all stored pre-provisioning configurations
+- Clarified pre-provisioning documentation — endpoint summaries now explain that pending configs are applied when an ONU first onboards
+- Linux installer auto-installs Docker Engine via `get.docker.com` when Docker is missing (with user prompt); improved error messages for headless servers
+
 ## [1.0.0-RC5] - 2026-04-13
 
 - PowerShell installer/uninstaller: native Windows Forms GUI (single wizard form, no external modules)
