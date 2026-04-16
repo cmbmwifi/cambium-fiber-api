@@ -546,6 +546,9 @@ with open(filepath, 'w') as f:
 "
         print_info "connections.json created (no authentication, will be configured via setup wizard)"
     fi
+
+    # Ensure the file is writable by the container's apiuser (uid 1000)
+    chown 1000:1000 "${CONNECTIONS_FILE}"
 }
 
 load_or_pull_image() {
@@ -824,7 +827,9 @@ open_browser() {
 
     # shellcheck source=/dev/null
     source "${ENV_FILE}"
-    SETUP_URL="http://localhost:${CAMBIUM_API_PORT}/setup"
+    HOST_IP=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7}' | head -1)
+    HOST_IP="${HOST_IP:-localhost}"
+    SETUP_URL="http://${HOST_IP}:${CAMBIUM_API_PORT}/setup"
 
     # Try different browser commands
     if command -v xdg-open &> /dev/null; then
@@ -839,6 +844,8 @@ open_browser() {
 print_success() {
     # shellcheck source=/dev/null
     source "${ENV_FILE}"
+    HOST_IP=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7}' | head -1)
+    HOST_IP="${HOST_IP:-localhost}"
 
     # ANSI escape codes for hyperlinks (OSC 8)
     BLUE='\033[1;34m'
@@ -858,9 +865,9 @@ print_success() {
     echo -e "  ${GREEN}✓ Installation Complete!${NC}"
     echo "================================================================"
     echo ""
-    echo -e "  ${BOLD}${YELLOW}Next Step:${NC} Open $(hyperlink "http://localhost:${CAMBIUM_API_PORT}/setup") to configure your OLTs"
+    echo -e "  ${BOLD}${YELLOW}Next Step:${NC} Open $(hyperlink "http://${HOST_IP}:${CAMBIUM_API_PORT}/setup") to configure your OLTs"
     echo ""
-    echo -e "  ${CYAN}API Documentation:${NC} $(hyperlink "http://localhost:${CAMBIUM_API_PORT}/docs")"
+    echo -e "  ${CYAN}API Documentation:${NC} $(hyperlink "http://${HOST_IP}:${CAMBIUM_API_PORT}/docs")"
     echo -e "  ${CYAN}View Logs:${NC} docker logs -f cambium-fiber-api"
     echo ""
     echo "================================================================"
